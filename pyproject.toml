@@ -1,0 +1,72 @@
+[build-system]
+requires = [ "setuptools",]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthy_heartrate_breathing"
+version = "0.2.2"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [ "aiortc>=1.13.0", "fastrtc>=0.0.34", "gradio==5.50.1.dev1", "huggingface-hub==1.3.0", "opencv-python>=4.12.0.88", "python-dotenv", "openai>=2.1", "reachy_mini_dances_library", "reachy_mini_toolbox", "reachy-mini>=1.3.1", "eclipse-zenoh~=1.7.0", "gradio_client>=1.13.3",]
+[[project.authors]]
+name = "Pollen Robotics"
+email = "contact@pollen-robotics.com"
+
+[dependency-groups]
+dev = [ "pytest", "pytest-asyncio", "ruff==0.12.0", "mypy==1.18.2", "pre-commit", "types-requests", "python-semantic-release>=10.5.3",]
+
+[project.optional-dependencies]
+reachy_mini_wireless = [ "PyGObject>=3.42.2,<=3.46.0", "gst-signalling>=1.1.2",]
+local_vision = [ "torch>=2.1", "transformers==5.0.0rc2", "num2words",]
+yolo_vision = [ "ultralytics", "supervision",]
+mediapipe_vision = [ "mediapipe==0.10.14",]
+all_vision = [ "torch>=2.1", "transformers==5.0.0rc2", "num2words", "ultralytics", "supervision", "mediapipe==0.10.14",]
+
+[project.scripts]
+healthy-heartrate-breathing = "healthy_heartrate_breathing.main:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.ruff]
+line-length = 119
+exclude = [ ".venv", "dist", "build", "**/__pycache__", "*.egg-info", ".mypy_cache", ".pytest_cache",]
+
+[tool.mypy]
+python_version = "3.12"
+files = [ "src/",]
+ignore_missing_imports = true
+strict = true
+show_error_codes = true
+warn_unused_ignores = true
+
+[project.entry-points.reachy_mini_apps]
+healthy_heartrate_breathing = "healthy_heartrate_breathing.main:HealthyHeartrateBreathing"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.package-data]
+healthy_heartrate_breathing = [ "images/*", "static/*", ".env.example", "demos/**/*.txt", "prompts_library/*.txt", "profiles/**/*.txt", "prompts/**/*.txt",]
+
+[tool.ruff.lint]
+select = [ "E", "F", "W", "I", "C4", "D",]
+ignore = [ "E501", "D100", "D203", "D213",]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.setuptools.packages.find]
+where = [ "src",]
+
+[tool.ruff.lint.isort]
+length-sort = true
+lines-after-imports = 2
+no-lines-before = [ "standard-library", "local-folder",]
+known-local-folder = [ "healthy_heartrate_breathing",]
+known-first-party = [ "reachy_mini", "reachy_mini_dances_library", "reachy_mini_toolbox",]
+split-on-trailing-comma = true
