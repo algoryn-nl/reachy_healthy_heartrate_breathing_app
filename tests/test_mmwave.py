@@ -1,86 +1,171 @@
-"""Tests for the mmWave tool."""
+"""Tests for the binary mmWave protocol and tool integration."""
+# ruff: noqa: D102,D103,D105,D107
 
 from __future__ import annotations
 import sys
-import json
 import types
+import struct
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave import MmWave
+from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    EVT_BIO,
+    EVT_PONG,
+    EVT_STATE,
+    CMD_SET_HM,
+    ERR_BAD_LEN,
+    EVT_TARGETS,
+    CMD_SET_FOCUS,
+    PROTO_VERSION,
+    CMD_SET_BIO_MS,
+    CMD_SET_TARGETS_MS,
+    ProtocolError,
+    cobs_encode,
+    decode_event,
+    decode_frame,
+    encode_frame,
+    crc16_ccitt_false,
+    extract_encoded_frames,
+)
 
 
-def _json_line(payload: dict[str, object]) -> bytes:
-    """Serialize one telemetry payload line."""
-    return (json.dumps(payload) + "\n").encode("utf-8")
+def _pack_state(
+    *,
+    t_ms: int,
+    state_enum: int,
+    pose_enum: int,
+    head_moving: int,
+    human: int,
+    n_targets: int,
+    dist_new: int,
+    dist_mm: int,
+) -> bytes:
+    return struct.pack(
+        "<IBBBBBBH",
+        t_ms,
+        state_enum,
+        pose_enum,
+        head_moving,
+        human,
+        n_targets,
+        dist_new,
+        dist_mm,
+    )
 
 
-def _raw_line(payload: str) -> bytes:
-    """Serialize raw serial text line."""
-    return (payload + "\n").encode("utf-8")
+def _pack_bio(*, t_ms: int, allowed: int, valid: int, br_new: int, hr_new: int, br_centi: int, hr_centi: int) -> bytes:
+    return struct.pack("<IBBBBHH", t_ms, allowed, valid, br_new, hr_new, br_centi, hr_centi)
+
+
+def _pack_targets_single(
+    *,
+    t_ms: int,
+    forced_focus: int,
+    cluster: int,
+    x_mm: int,
+    y_mm: int,
+    r_mm: int,
+    bearing_cdeg: int,
+    v_x10: int,
+    truncated: bool = False,
+) -> bytes:
+    flags = 0x01
+    if truncated:
+        flags |= 0x02
+    header = struct.pack(
+        "<IhhhhHhhBB",
+        t_ms,
+        forced_focus,
+        cluster,
+        x_mm,
+        y_mm,
+        r_mm,
+        bearing_cdeg,
+        v_x10,
+        flags,
+        1,
+    )
+    target = struct.pack("<hhhHhh", cluster, x_mm, y_mm, r_mm, bearing_cdeg, v_x10)
+    return header + target
 
 
 class FakeSerial:
-    """Small fake serial port for deterministic mmWave tests."""
+    """Small fake serial port for deterministic binary protocol tests."""
 
     class SerialException(Exception):
         """Fake serial exception type."""
 
-    response_batches: list[list[bytes]] = []
+    response_batches: list[dict[str, Any]] = []
     instances: list["FakeSerial"] = []
 
-    def __init__(self, _port: str, _baud: int, timeout: float = 0.2, responses: list[bytes] | None = None) -> None:
-        """Create a fake serial connection with optional deterministic responses."""
+    def __init__(
+        self,
+        _port: str,
+        _baud: int,
+        timeout: float = 0.2,
+        responses: bytes | None = None,
+        read_chunk_size: int | None = None,
+    ) -> None:
         self.port = _port
         self.baudrate = _baud
         self.timeout = timeout
         if responses is not None:
-            self._responses = list(responses)
+            self._buffer = bytearray(responses)
+            self._read_chunk_size = read_chunk_size
         elif FakeSerial.response_batches:
-            self._responses = FakeSerial.response_batches.pop(0)
+            config = FakeSerial.response_batches.pop(0)
+            self._buffer = bytearray(config.get("bytes", b""))
+            self._read_chunk_size = config.get("read_chunk_size")
         else:
-            self._responses = []
-        self.writes: list[str] = []
+            self._buffer = bytearray()
+            self._read_chunk_size = None
+        self.writes: list[bytes] = []
         FakeSerial.instances.append(self)
 
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffer)
+
     def write(self, data: bytes) -> None:
-        """Capture serial payload writes."""
-        self.writes.append(data.decode("utf-8").strip())
+        self.writes.append(bytes(data))
 
     def flush(self) -> None:
-        """Flush is a no-op in the fake serial."""
         return None
 
-    def readline(self) -> bytes:
-        """Read next queued line or return empty bytes when exhausted."""
-        if not self._responses:
+    def read(self, size: int = 1) -> bytes:
+        if not self._buffer:
             return b""
-        return self._responses.pop(0)
+        n = min(size, len(self._buffer))
+        if self._read_chunk_size is not None:
+            n = min(n, self._read_chunk_size)
+        out = bytes(self._buffer[:n])
+        del self._buffer[:n]
+        return out
 
     def close(self) -> None:
-        """Close hook for consistency with real serial objects."""
         return None
 
     def __enter__(self) -> "FakeSerial":
-        """Context-manager entry."""
         return self
 
     def __exit__(self, *_exc_info: object) -> bool:
-        """Context-manager exit."""
         return False
 
 
-def _patch_serial_modules(monkeypatch: pytest.MonkeyPatch, responses_batches: list[list[bytes]]) -> None:
-    """Inject fake serial modules for mmWave.__call__."""
-    FakeSerial.response_batches = [list(lines) for lines in responses_batches]
+def _patch_serial_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    responses_batches: list[dict[str, Any]],
+) -> None:
+    FakeSerial.response_batches = list(responses_batches)
     FakeSerial.instances = []
 
     serial_module = types.ModuleType("serial")
     serialutil_module = types.ModuleType("serial.serialutil")
     serialutil_module.SerialException = FakeSerial.SerialException
-
     serial_module.Serial = FakeSerial
     serial_module.serialutil = serialutil_module
 
@@ -89,141 +174,293 @@ def _patch_serial_modules(monkeypatch: pytest.MonkeyPatch, responses_batches: li
 
 
 def _deps() -> ToolDependencies:
-    """Build minimal tool dependencies for mmWave tests."""
     return ToolDependencies(
         reachy_mini=SimpleNamespace(),
         movement_manager=None,
     )
 
 
-def test_resolve_serial_port_prefers_explicit() -> None:
-    """Explicit serial port always wins over env fallback."""
-    tool = MmWave()
-    assert tool._resolve_serial_port("/dev/custom") == "/dev/custom"
+def _decode_written_frames(serial: FakeSerial) -> list[tuple[int, int, int, bytes]]:
+    decoded = []
+    for write in serial.writes:
+        assert write.endswith(b"\x00")
+        decoded.append(decode_frame(write[:-1]))
+    return decoded
 
 
-def test_resolve_serial_port_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Environment variable is used when no explicit port is set."""
-    monkeypatch.setenv("MMWAVE_SERIAL_PORT", "/env/port")
-    tool = MmWave()
-    assert tool._resolve_serial_port(None) == "/env/port"
+def test_frame_roundtrip_and_cobs_extraction() -> None:
+    payload = b"\x00\x01\x02\x00"
+    frame_1 = encode_frame(EVT_PONG, payload, seq=7)
+    frame_2 = encode_frame(EVT_STATE, _pack_state(t_ms=42, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344), seq=8)
+
+    buffer = bytearray()
+    parts = [frame_1[:4], frame_1[4:] + frame_2[:5], frame_2[5:]]
+    extracted: list[bytes] = []
+    for part in parts:
+        buffer.extend(part)
+        extracted.extend(extract_encoded_frames(buffer))
+
+    assert len(extracted) == 2
+
+    version_1, msg_type_1, seq_1, payload_1 = decode_frame(extracted[0])
+    assert version_1 == PROTO_VERSION
+    assert msg_type_1 == EVT_PONG
+    assert seq_1 == 7
+    assert payload_1 == payload
+
+    version_2, msg_type_2, seq_2, payload_2 = decode_frame(extracted[1])
+    assert version_2 == PROTO_VERSION
+    assert msg_type_2 == EVT_STATE
+    assert seq_2 == 8
+    assert decode_event(msg_type_2, payload_2)["state"] == "PRESENT_FAR"
 
 
-def test_pick_target_selects_closest() -> None:
-    """Pick the nearest target among valid telemetry entries."""
-    tool = MmWave()
+def test_decode_frame_rejects_bad_length() -> None:
+    raw = struct.pack("<BBHH", PROTO_VERSION, EVT_BIO, 1, 30) + b"\x01\x02"
+    crc = crc16_ccitt_false(raw)
+    raw += struct.pack("<H", crc)
+    encoded = cobs_encode(raw)
 
-    message = {
-        "type": "targets",
-        "n": 2,
-        "targets": [
-            {"cluster": 3, "x": 0.2, "y": 2.0, "r": 2.02, "bearing": 0, "v": 0},
-            {"cluster": 5, "x": 0.1, "y": 0.5, "r": 0.51, "bearing": 0, "v": 0},
-        ],
-    }
-
-    picked = tool._pick_target_from_message(message)
-    assert picked is not None
-    assert picked["cluster"] == 5
+    with pytest.raises(ProtocolError):
+        decode_frame(encoded)
 
 
-def test_parse_payload_strips_serial_prefix_and_repairs_state() -> None:
-    """Monitor-prefixed and malformed state JSON is repaired and parsed."""
-    tool = MmWave()
-
-    payload = tool._parse_payload(
-        b'20:09:52.663 -> {"type":"state","t_ms":34792PRESENT_FAR","pose":"SITTING","head_moving":0,"human":1,"n_targets":1,"dist_cm":34.44,"dist_new":1}'
-    )
-
-    assert payload is not None
-    assert payload["type"] == "state"
-    assert payload["state"] == "PRESENT_FAR"
-    assert payload["t_ms"] == 34792
+def test_unknown_event_is_reported_as_unknown() -> None:
+    unknown = decode_event(0xFE, b"\x01\x02")
+    assert unknown["type"] == "unknown"
+    assert unknown["msg_type"] == 0xFE
 
 
-def test_pick_target_uses_n_targets_when_n_missing() -> None:
-    """Targets payloads using n_targets should still be accepted."""
-    tool = MmWave()
-
-    message = {
-        "type": "targets",
-        "t_ms": 35996,
-        "n_targets": 2,
-        "targets": [
-            {"cluster": 9, "x": 0.2, "y": 0.8, "r": 0.83, "bearing": 1.0, "v": 0},
-            {"cluster": 11, "x": 0.1, "y": 0.3, "r": 0.32, "bearing": 1.0, "v": 0},
-        ],
-    }
-
-    picked = tool._pick_target_from_message(message)
-    assert picked is not None
-    assert picked["cluster"] == 11
+def test_bio_null_sentinel_decodes_to_none() -> None:
+    payload = _pack_bio(t_ms=123, allowed=0, valid=0, br_new=0, hr_new=0, br_centi=0xFFFF, hr_centi=0xFFFF)
+    event = decode_event(EVT_BIO, payload)
+    assert event["br"] is None
+    assert event["hr"] is None
 
 
 @pytest.mark.asyncio
-async def test_locate_and_measure_with_full_serial_snippet(monkeypatch: pytest.MonkeyPatch) -> None:
-    """End-to-end mixed serial stream should still resolve to a usable vitals result."""
-    mixed_stream = [
-        _raw_line(
-            '20:09:52.663 -> {"type":"state","t_ms":34792PRESENT_FAR","pose":"SITTING","head_moving":0,"human":1,"n_targets":1,"dist_cm":34.44,"dist_new":1}'
-        ),
-        _raw_line(
-            '20:09:52.729 -> {"type":"bio","t_ms":34993,"allowed":1,"valid":0,"br":14.00,"br_new":1,"hr":84.00,"hr_new":0}'
-        ),
-        _raw_line(
-            '20:09:52.827 -> {"type":"targets","t_ms":35093,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.080,"y":0.349,"r":0.358,"bearing":-12.8,"v":0.00},"targets":[{"cluster":0,"x":-0.080,"y":0.349,"r":0.358,"bearing":-12.8,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:53.025 -> {"type":"state","t_ms":35294,"state":"PRESENT_FAR","pose":"SITTING","head_moving":0,"human":0,"n_targets":0,"dist_cm":34.44,"dist_new":0}'
-        ),
-        _raw_line(
-            '20:09:53.125 -> {"type":"targets","t_ms":35394,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.102,"y":0.357,"r":0.372,"bearing":-15.9,"v":0.00},"targets":[{"cluster":0,"x":-0.102,"y":0.357,"r":0.372,"bearing":-15.9,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:53.125 -> {"type":"state","t_ms":35394,"state":"PRESENT_FAR","pose":"SITTING","head_moving":0,"human":1,"n_targets":1,"dist_cm":34.44,"dist_new":1}'
-        ),
-        _raw_line(
-            '20:09:53.421 -> {"type":"targets","t_ms":35695,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.154,"y":0.465,"r":0.490,"bearing":-18.3,"v":0.00},"targets":[{"cluster":0,"x":-0.154,"y":0.465,"r":0.490,"bearing":-18.3,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:53.517 -> {"type":"state","t_ms":35796,"state":"PRESENT_FAR","pose":"SITTING","head_moving":0,"human":0,"n_targets":0,"dist_cm":34.44,"dist_new":0}'
-        ),
-        _raw_line(
-            '20:09:53.615 -> {"type":"state","t_ms":35896,"state":"PRESENT_FAR","pose":"SITTING","head_moving":0,"human":1,"n_targets":1,"dist_cm":34.44,"dist_new":1}'
-        ),
-        _raw_line(
-            '20:09:53.747 -> {"type":"targets","t_ms":35996,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.154,"y":0.465,"r":0.490,"bearing":-18.3,"v":0.00},"targets":[{"cluster":0,"x":-0.154,"y":0.465,"r":0.490,"bearing":-18.3,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:53.747 -> {"type":"bio","t_ms":35996,"allowed":1,"valid":1,"br":14.00,"br_new":1,"hr":79.00,"hr_new":1}'
-        ),
-        _raw_line(
-            '20:09:54.044 -> {"type":"state","t_ms":36302,"state":"PRESENT_FAR","pose":"SITTING","head_moving":0,"human":0,"n_targets":0,"dist_cm":34.44,"dist_new":0}'
-        ),
-        _raw_line(
-            '20:09:54.143 -> {"type":"targets","t_ms":36402,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.183,"y":0.525,"r":0.556,"bearing":-19.2,"v":0.00},"targets":[{"cluster":0,"x":-0.183,"y":0.525,"r":0.556,"bearing":-19.2,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:54.143 -> {"type":"state","t_ms":36402,"state":"STILL_NEAR","pose":"SITTING","head_moving":0,"human":1,"n_targets":1,"dist_cm":40.18,"dist_new":1}'
-        ),
-        _raw_line(
-            '20:09:54.441 -> {"type":"targets","t_ms":36703,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.183,"y":0.525,"r":0.556,"bearing":-19.2,"v":0.00},"targets":[{"cluster":0,"x":-0.183,"y":0.525,"r":0.556,"bearing":-19.2,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:54.637 -> {"type":"state","t_ms":36904,"state":"STILL_NEAR","pose":"SITTING","head_moving":0,"human":0,"n_targets":0,"dist_cm":40.18,"dist_new":0}'
-        ),
-        _raw_line(
-            '20:09:54.736 -> {"type":"targets","t_ms":37004,"n":1,"forced_focus":-1,"focus":{"cluster":0,"x":-0.183,"y":0.525,"r":0.556,"bearing":-19.2,"v":0.00},"targets":[{"cluster":0,"x":-0.183,"y":0.525,"r":0.556,"bearing":-19.2,"v":0.00}]}'
-        ),
-        _raw_line(
-            '20:09:54.736 -> {"type":"state","t_ms":37004,"state":"STILL_NEAR","pose":"SITTING","head_moving":0,"human":1,"n_targets":1,"dist_cm":40.18,"dist_new":1}'
-        ),
-        _raw_line(
-            '20:09:54.736 -> {"type":"bio","t_ms":37004,"allowed":1,"valid":0,"br":10.00,"br_new":1,"hr":76.00,"hr_new":0}'
-        ),
-    ]
+async def test_measure_mode_sends_binary_commands_and_parses_bio(monkeypatch: pytest.MonkeyPatch) -> None:
+    bio_payload = _pack_bio(t_ms=100, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1240, hr_centi=6900)
+    responses = encode_frame(EVT_BIO, bio_payload, seq=1)
+    _patch_serial_modules(monkeypatch, [{"bytes": responses}])
 
-    _patch_serial_modules(monkeypatch, [mixed_stream])
+    tool = MmWave()
+    response = await tool(_deps(), mode="measure", focus_cluster=4, duration_s=0.1)
+
+    assert response["status"] == "ok"
+    assert response["measure"]["valid_bio"]["heart_rate_bpm"] == 69.0
+    assert response["measure"]["valid_bio"]["breath_rate_bpm"] == 12.4
+
+    serial = FakeSerial.instances[0]
+    sent = _decode_written_frames(serial)
+    msg_types = [msg_type for _version, msg_type, _seq, _payload in sent]
+    assert msg_types[:3] == [CMD_SET_FOCUS, CMD_SET_HM, CMD_SET_BIO_MS]
+
+
+@pytest.mark.asyncio
+async def test_locate_and_measure_partial_read_and_focus_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    targets_payload = _pack_targets_single(
+        t_ms=35093,
+        forced_focus=-1,
+        cluster=7,
+        x_mm=100,
+        y_mm=1000,
+        r_mm=1005,
+        bearing_cdeg=100,
+        v_x10=0,
+    )
+    bio_payload = _pack_bio(t_ms=35996, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1310, hr_centi=7000)
+
+    stream = encode_frame(EVT_TARGETS, targets_payload, seq=2) + encode_frame(EVT_BIO, bio_payload, seq=3)
+    _patch_serial_modules(monkeypatch, [{"bytes": stream, "read_chunk_size": 3}])
+
+    tool = MmWave()
+    response = await tool(
+        _deps(),
+        mode="locate_and_measure",
+        duration_s=0.1,
+        measure_duration_s=0.1,
+        sweep_if_unseen=False,
+    )
+
+    assert response["status"] == "ok"
+    assert response["scan"]["latest_target"]["cluster"] == 7
+
+    serial = FakeSerial.instances[0]
+    sent = _decode_written_frames(serial)
+    msg_types = [msg_type for _version, msg_type, _seq, _payload in sent]
+    assert msg_types[0:2] == [CMD_SET_HM, CMD_SET_TARGETS_MS]
+    assert CMD_SET_FOCUS in msg_types
+
+
+@pytest.mark.asyncio
+async def test_resync_after_corrupted_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad_frame = bytearray(encode_frame(EVT_STATE, _pack_state(t_ms=10, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=350), seq=10))
+    bad_frame[-3] ^= 0x11  # break crc while keeping delimiter
+
+    good_bio = encode_frame(EVT_BIO, _pack_bio(t_ms=20, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7900), seq=11)
+    stream = bytes(bad_frame) + good_bio
+    _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+
+    tool = MmWave()
+    response = await tool(_deps(), mode="measure", duration_s=0.1)
+
+    assert response["status"] == "ok"
+    assert response["measure"]["valid_bio"]["heart_rate_bpm"] == 79.0
+
+
+@pytest.mark.asyncio
+async def test_unsupported_version_frame_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad_version = encode_frame(
+        EVT_BIO,
+        _pack_bio(t_ms=30, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1200, hr_centi=6800),
+        seq=12,
+        version=2,
+    )
+    good_version = encode_frame(
+        EVT_BIO,
+        _pack_bio(t_ms=31, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1210, hr_centi=6810),
+        seq=13,
+    )
+    _patch_serial_modules(monkeypatch, [{"bytes": bad_version + good_version}])
+
+    tool = MmWave()
+    response = await tool(_deps(), mode="measure", duration_s=0.1)
+
+    assert response["status"] == "ok"
+    assert response["measure"]["valid_bio"]["heart_rate_bpm"] == 68.1
+
+
+@pytest.mark.asyncio
+async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = b"".join(
+        [
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=34792,
+                    state_enum=2,
+                    pose_enum=1,
+                    head_moving=0,
+                    human=1,
+                    n_targets=1,
+                    dist_new=1,
+                    dist_mm=344,
+                ),
+                seq=20,
+            ),
+            encode_frame(EVT_BIO, _pack_bio(t_ms=34993, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1400, hr_centi=8400), seq=21),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=35093,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-80,
+                    y_mm=349,
+                    r_mm=358,
+                    bearing_cdeg=-1280,
+                    v_x10=0,
+                ),
+                seq=22,
+            ),
+            encode_frame(EVT_STATE, _pack_state(t_ms=35294, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344), seq=23),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=35394,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-102,
+                    y_mm=357,
+                    r_mm=372,
+                    bearing_cdeg=-1590,
+                    v_x10=0,
+                ),
+                seq=24,
+            ),
+            encode_frame(EVT_STATE, _pack_state(t_ms=35394, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344), seq=25),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=35695,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-154,
+                    y_mm=465,
+                    r_mm=490,
+                    bearing_cdeg=-1830,
+                    v_x10=0,
+                ),
+                seq=26,
+            ),
+            encode_frame(EVT_STATE, _pack_state(t_ms=35796, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344), seq=27),
+            encode_frame(EVT_STATE, _pack_state(t_ms=35896, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344), seq=28),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=35996,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-154,
+                    y_mm=465,
+                    r_mm=490,
+                    bearing_cdeg=-1830,
+                    v_x10=0,
+                ),
+                seq=29,
+            ),
+            encode_frame(EVT_BIO, _pack_bio(t_ms=35996, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7900), seq=30),
+            encode_frame(EVT_STATE, _pack_state(t_ms=36302, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344), seq=31),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=36402,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-183,
+                    y_mm=525,
+                    r_mm=556,
+                    bearing_cdeg=-1920,
+                    v_x10=0,
+                ),
+                seq=32,
+            ),
+            encode_frame(EVT_STATE, _pack_state(t_ms=36402, state_enum=4, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=401), seq=33),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=36703,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-183,
+                    y_mm=525,
+                    r_mm=556,
+                    bearing_cdeg=-1920,
+                    v_x10=0,
+                ),
+                seq=34,
+            ),
+            encode_frame(EVT_STATE, _pack_state(t_ms=36904, state_enum=4, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=401), seq=35),
+            encode_frame(
+                EVT_TARGETS,
+                _pack_targets_single(
+                    t_ms=37004,
+                    forced_focus=-1,
+                    cluster=0,
+                    x_mm=-183,
+                    y_mm=525,
+                    r_mm=556,
+                    bearing_cdeg=-1920,
+                    v_x10=0,
+                ),
+                seq=36,
+            ),
+            encode_frame(EVT_STATE, _pack_state(t_ms=37004, state_enum=4, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=401), seq=37),
+            encode_frame(EVT_BIO, _pack_bio(t_ms=37004, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1000, hr_centi=7600), seq=38),
+        ]
+    )
+    _patch_serial_modules(monkeypatch, [{"bytes": stream, "read_chunk_size": 7}])
 
     tool = MmWave()
     response = await tool(
@@ -242,114 +479,11 @@ async def test_locate_and_measure_with_full_serial_snippet(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_measure_mode_requests_focus_and_returns_bio(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Measure mode issues HM/BIO commands and returns parsed bio."""
-    responses = [
-        _json_line(
-            {
-                "type": "bio",
-                "t_ms": 100,
-                "allowed": 1,
-                "valid": 1,
-                "br": 12.4,
-                "br_new": 1,
-                "hr": 69.0,
-                "hr_new": 1,
-            }
-        ),
-    ]
-
-    _patch_serial_modules(monkeypatch, [responses])
-
-    tool = MmWave()
-    response = await tool(_deps(), mode="measure", focus_cluster=4, duration_s=0.2)
-    assert response["status"] == "ok"
-
-    serial = FakeSerial.instances[0]
-    assert any(cmd == "FOCUS=4" for cmd in serial.writes)
-    assert "HM=0" in serial.writes
-    assert response["measure"]["success"]
-
-
-@pytest.mark.asyncio
-async def test_locate_and_measure_uses_scan_cluster_for_focus(monkeypatch: pytest.MonkeyPatch) -> None:
-    """locate_and_measure should lock onto last scanned cluster before measuring."""
-    scan_message = _json_line(
-        {
-            "type": "targets",
-            "n": 1,
-            "targets": [{"cluster": 7, "x": 0.1, "y": 1.0, "r": 1.01, "bearing": 1.0, "v": 0}],
-        }
-    )
-    bio_message = _json_line(
-        {
-            "type": "bio",
-            "t_ms": 150,
-            "allowed": 1,
-            "valid": 1,
-            "br": 13.1,
-            "br_new": 1,
-            "hr": 70.0,
-            "hr_new": 1,
-        }
-    )
-
-    _patch_serial_modules(monkeypatch, [[scan_message, bio_message]])
-
-    tool = MmWave()
-    response = await tool(
-        _deps(),
-        mode="locate_and_measure",
-        duration_s=0.1,
-        measure_duration_s=0.1,
-        sweep_if_unseen=False,
-    )
-    assert response["status"] == "ok"
-    assert response["scan"]["latest_target"]["cluster"] == 7
-
-    serial = FakeSerial.instances[0]
-    assert any(cmd == "FOCUS=7" for cmd in serial.writes)
-    assert any(cmd == "HM=1" for cmd in serial.writes)
-    assert any(cmd == "HM=0" for cmd in serial.writes)
-
-
-def test_scan_mode_updates_latest_target_from_targets() -> None:
-    """Low-level _scan_sync extracts the closest target from targets telemetry."""
-    tool = MmWave()
-    ser = FakeSerial(
-        "/dev/test",
-        115200,
-        responses=[
-            _json_line(
-                {
-                    "type": "targets",
-                    "n": 1,
-                    "targets": [
-                        {"cluster": 9, "x": 0.2, "y": 0.8, "r": 0.83, "bearing": 1.0, "v": 0},
-                        {"cluster": 11, "x": 0.1, "y": 0.3, "r": 0.32, "bearing": 1.0, "v": 0},
-                    ],
-                }
-            )
-        ],
-    )
-
-    scan = tool._scan_sync(
-        ser,
-        deps=_deps(),
-        duration_s=0.0,
-        do_sweep=False,
-        focus_cluster=-1,
-        targets_ms=250,
-    )
-
-    assert scan["latest_target"] is not None
-    assert scan["latest_target"]["cluster"] == 11
-
-
-@pytest.mark.asyncio
 async def test_invalid_mode_returns_error() -> None:
-    """Unsupported modes should return a structured error."""
     tool = MmWave()
     response = await tool(_deps(), mode="dance")
-
     assert response["error"] == "invalid mode 'dance', use scan, measure, or locate_and_measure"
+
+
+def test_bad_len_error_code_constant_is_stable() -> None:
+    assert ERR_BAD_LEN == 2

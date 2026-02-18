@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 import os
-import re
 import glob
-import json
 import time
 import asyncio
 import logging
@@ -13,6 +11,22 @@ from typing import Any, Dict, Optional
 from reachy_mini.utils import create_head_pose
 from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
+from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    CMD_SET_HM,
+    CMD_SET_FOCUS,
+    PROTO_VERSION,
+    CMD_SET_BIO_MS,
+    CMD_SET_TARGETS_MS,
+    ProtocolError,
+    decode_event,
+    decode_frame,
+    encode_frame,
+    pack_cmd_set_hm,
+    pack_cmd_set_focus,
+    pack_cmd_set_bio_ms,
+    extract_encoded_frames,
+    pack_cmd_set_targets_ms,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -104,43 +118,45 @@ class MmWave(Tool):
             raise RuntimeError("No mmWave serial port found. Set MMWAVE_SERIAL_PORT.")
         return candidates[0]
 
-    def _send_line(self, ser: Any, line: str) -> None:
-        payload = f"{line}\n".encode("utf-8")
-        ser.write(payload)
+    def _next_tx_seq(self, tx_state: Dict[str, int]) -> int:
+        seq = tx_state["seq"]
+        tx_state["seq"] = (seq + 1) & 0xFFFF
+        return seq
+
+    def _send_command(self, ser: Any, tx_state: Dict[str, int], msg_type: int, payload: bytes = b"") -> None:
+        frame = encode_frame(msg_type=msg_type, payload=payload, seq=self._next_tx_seq(tx_state), version=PROTO_VERSION)
+        ser.write(frame)
         ser.flush()
 
-    def _parse_payload(self, raw: bytes) -> Optional[Dict[str, Any]]:
-        text = raw.strip().decode("utf-8", errors="ignore").strip()
-        if not text:
-            return None
+    def _poll_events(self, ser: Any, rx_buffer: bytearray) -> list[Dict[str, Any]]:
+        in_waiting = getattr(ser, "in_waiting", 0)
+        read_size = in_waiting if isinstance(in_waiting, int) and in_waiting > 0 else 1
+        chunk = ser.read(read_size)
+        if not chunk:
+            return []
 
-        # Serial monitor output can include timestamp prefixes such as:
-        # "20:09:52.663 -> { ... }". Strip that noise first.
-        if "->" in text:
-            suffix = text.split("->", 1)[1].strip()
-            if suffix:
-                text = suffix
+        rx_buffer.extend(chunk)
+        events: list[Dict[str, Any]] = []
+        for encoded_frame in extract_encoded_frames(rx_buffer):
+            try:
+                version, msg_type, _seq, payload = decode_frame(encoded_frame)
+            except ProtocolError:
+                logger.debug("Ignoring invalid frame", exc_info=True)
+                continue
 
-        # Keep the first JSON object on the line if extra text is present.
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            return None
-        text = text[start : end + 1].strip()
+            if version != PROTO_VERSION:
+                logger.debug("Ignoring unsupported protocol version: %s", version)
+                continue
 
-        # Handle malformed monitor copy patterns like:
-        # {"type":"state","t_ms":34792PRESENT_FAR","pose":"SITTING",...}
-        # where the `state` key got glued to the t_ms value.
-        text = re.sub(r'"t_ms":(\d+)([A-Z_]+)",', r'"t_ms":\1,"state":"\2",', text, count=1)
+            try:
+                event = decode_event(msg_type, payload)
+            except ProtocolError:
+                logger.debug("Ignoring frame with invalid payload", exc_info=True)
+                continue
 
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            logger.debug("Ignoring non-json payload: %s", text)
-            return None
-        if not isinstance(payload, dict):
-            return None
-        return payload
+            events.append(event)
+
+        return events
 
     def _pick_target_from_message(self, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if msg.get("type") != "targets":
@@ -277,6 +293,8 @@ class MmWave(Tool):
         ser: Any,
         *,
         deps: ToolDependencies,
+        tx_state: Dict[str, int],
+        rx_buffer: bytearray,
         duration_s: float,
         do_sweep: bool,
         focus_cluster: int,
@@ -294,35 +312,36 @@ class MmWave(Tool):
         if do_sweep:
             self._queue_short_sweep(deps)
 
-        self._send_line(ser, "HM=1")
-        self._send_line(ser, f"TARGETS_MS={targets_ms}")
+        self._send_command(ser, tx_state, CMD_SET_HM, pack_cmd_set_hm(1))
+        self._send_command(ser, tx_state, CMD_SET_TARGETS_MS, pack_cmd_set_targets_ms(targets_ms))
         if focus_cluster >= 0:
-            self._send_line(ser, f"FOCUS={focus_cluster}")
+            self._send_command(ser, tx_state, CMD_SET_FOCUS, pack_cmd_set_focus(focus_cluster))
 
         while time.monotonic() < timeout:
-            raw = ser.readline()
-            if not raw:
-                continue
-            msg = self._parse_payload(raw)
-            if not msg:
+            events = self._poll_events(ser, rx_buffer)
+            if not events:
                 continue
 
-            msg_type = msg.get("type")
-            if msg_type == "targets":
-                state["telemetry"].append(msg)
-                state["targets_seen"] += 1
-                best = self._pick_target_from_message(msg)
-                if best is not None:
-                    state["latest_target"] = best
-                    if do_sweep:
-                        deps.movement_manager.clear_move_queue()
-                    if isinstance(msg.get("n"), int) and msg.get("n") == 1:
-                        # Prefer the single target once seen as "high confidence"
-                        state["recent_targets"].append(best)
-                    if stop_when_target_found and state["latest_target"] is not None:
-                        break
-            if msg_type == "state":
-                state["state"] = msg.get("state")
+            for msg in events:
+                msg_type = msg.get("type")
+                if msg_type == "targets":
+                    state["telemetry"].append(msg)
+                    state["targets_seen"] += 1
+                    best = self._pick_target_from_message(msg)
+                    if best is not None:
+                        state["latest_target"] = best
+                        if do_sweep and deps.movement_manager is not None:
+                            deps.movement_manager.clear_move_queue()
+                        if isinstance(msg.get("n"), int) and msg.get("n") == 1:
+                            # Prefer the single target once seen as "high confidence"
+                            state["recent_targets"].append(best)
+                        if stop_when_target_found:
+                            break
+                if msg_type == "state":
+                    state["state"] = msg.get("state")
+
+            if stop_when_target_found and state["latest_target"] is not None:
+                break
 
         if state["recent_targets"]:
             unique = []
@@ -336,6 +355,8 @@ class MmWave(Tool):
         self,
         ser: Any,
         *,
+        tx_state: Dict[str, int],
+        rx_buffer: bytearray,
         focus_cluster: int,
         timeout_s: float,
         bio_ms: int,
@@ -350,39 +371,37 @@ class MmWave(Tool):
         }
 
         if focus_cluster >= 0:
-            self._send_line(ser, f"FOCUS={focus_cluster}")
-        self._send_line(ser, "HM=0")
-        self._send_line(ser, f"BIO_MS={bio_ms}")
+            self._send_command(ser, tx_state, CMD_SET_FOCUS, pack_cmd_set_focus(focus_cluster))
+        self._send_command(ser, tx_state, CMD_SET_HM, pack_cmd_set_hm(0))
+        self._send_command(ser, tx_state, CMD_SET_BIO_MS, pack_cmd_set_bio_ms(bio_ms))
 
         timeout = time.monotonic() + timeout_s
         while time.monotonic() < timeout:
-            raw = ser.readline()
-            if not raw:
-                continue
-            msg = self._parse_payload(raw)
-            if not msg:
+            events = self._poll_events(ser, rx_buffer)
+            if not events:
                 continue
 
-            msg_type = msg.get("type")
-            if msg_type == "state":
-                result["state"] = msg
-            if msg_type == "bio":
-                result["attempts"] += 1
-                result["latest_bio"] = msg
-                result["bio_messages"].append(msg)
+            for msg in events:
+                msg_type = msg.get("type")
+                if msg_type == "state":
+                    result["state"] = msg
+                if msg_type == "bio":
+                    result["attempts"] += 1
+                    result["latest_bio"] = msg
+                    result["bio_messages"].append(msg)
 
-                allowed = bool(msg.get("allowed", 0))
-                valid = bool(msg.get("valid", 0))
-                if allowed and valid and msg.get("br") is not None and msg.get("hr") is not None:
-                    result["success"] = True
-                    result["valid_bio"] = {
-                        "heart_rate_bpm": msg.get("hr"),
-                        "breath_rate_bpm": msg.get("br"),
-                        "state": msg.get("state"),
-                        "hr_new": msg.get("hr_new"),
-                        "br_new": msg.get("br_new"),
-                    }
-                    break
+                    allowed = bool(msg.get("allowed", 0))
+                    valid = bool(msg.get("valid", 0))
+                    if allowed and valid and msg.get("br") is not None and msg.get("hr") is not None:
+                        result["success"] = True
+                        result["valid_bio"] = {
+                            "heart_rate_bpm": msg.get("hr"),
+                            "breath_rate_bpm": msg.get("br"),
+                            "state": msg.get("state"),
+                            "hr_new": msg.get("hr_new"),
+                            "br_new": msg.get("br_new"),
+                        }
+                        return result
         return result
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
@@ -426,6 +445,8 @@ class MmWave(Tool):
 
         def run_session() -> Dict[str, Any]:
             effective_focus_cluster = focus_cluster
+            tx_state = {"seq": 0}
+            rx_buffer = bytearray()
             with serial.Serial(serial_port, 115200, timeout=0.2) as ser:
                 response: Dict[str, Any] = {
                     "serial_port": serial_port,
@@ -437,6 +458,8 @@ class MmWave(Tool):
                     scan_result = self._scan_sync(
                         ser,
                         deps=deps,
+                        tx_state=tx_state,
+                        rx_buffer=rx_buffer,
                         duration_s=max(0.5, duration_s),
                         do_sweep=do_sweep,
                         focus_cluster=effective_focus_cluster,
@@ -458,6 +481,8 @@ class MmWave(Tool):
 
                     measure_result = self._measure_sync(
                         ser,
+                        tx_state=tx_state,
+                        rx_buffer=rx_buffer,
                         focus_cluster=effective_focus_cluster,
                         timeout_s=max(0.5, measure_duration),
                         bio_ms=bio_ms,
