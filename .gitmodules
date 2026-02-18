@@ -1,0 +1,3 @@
+[submodule "hardware/arduino/lib/Seeed-mmWave-library"]
+	path = hardware/arduino/lib/Seeed-mmWave-library
+	url = https://github.com/Love4yzp/Seeed-mmWave-library
