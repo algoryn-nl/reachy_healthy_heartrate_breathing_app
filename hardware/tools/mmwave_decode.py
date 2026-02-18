@@ -49,6 +49,8 @@ def _format_pretty(event: dict, msg_type: int, seq: int) -> str:
             f"seq={seq} type=state state={event.get('state')} pose={event.get('pose')} "
             f"human={event.get('human')} n_targets={event.get('n_targets')} dist_cm={event.get('dist_cm')}"
         )
+    if evt_type == "light":
+        return f"seq={seq} type=light valid={event.get('valid')} lux={event.get('lux')}"
     if evt_type == "ack":
         return f"seq={seq} type=ack cmd={event.get('cmd_id')} status={event.get('status_code')} value={event.get('value')}"
     if evt_type == "err":

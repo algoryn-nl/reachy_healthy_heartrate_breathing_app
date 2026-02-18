@@ -54,6 +54,7 @@ CRC details:
 - `0x91 EVT_STATE`
 - `0x92 EVT_TARGETS`
 - `0x93 EVT_BIO`
+- `0x94 EVT_LIGHT`
 
 ---
 
@@ -130,6 +131,21 @@ Firmware cap:
 - `MAX_TARGETS_WIRE = 8`
 - If more targets exist, only first 8 are sent and `flags.bit1` is set.
 
+### 4.4 `EVT_LIGHT` (`0x94`)
+
+Payload fields:
+- `u32 t_ms`
+- `u8 valid`
+- `f32 lux` (little-endian IEEE-754)
+
+Cadence and source:
+- Emitted at fixed `1s` cadence.
+- Sensor: BH1750 on I2C address `0x23`.
+
+Null semantics:
+- When `valid=0`, wire payload sets `lux=NaN`.
+- Python decoders normalize invalid/NaN lux to `None`.
+
 ---
 
 ## 5) Numeric scales and sentinels
@@ -138,10 +154,12 @@ Firmware cap:
 - Bearing: centi-degrees (`cdeg`)
 - Velocity: deci-centimeters/second (`0.1 cm/s`)
 - Bio rates: centi-bpm
+- Illuminance: lux (`f32`)
 
 Sentinels:
 - `u16 0xFFFF` for missing nullable values (`dist_mm`, `br_centi_bpm`, `hr_centi_bpm`)
 - `focus_cluster = -1` when no valid focus target
+- `EVT_LIGHT.lux` uses `NaN` with `valid=0` for missing values
 
 ---
 
@@ -155,6 +173,7 @@ The logical behavior remains the same as before:
 - `PING` health check
 
 Vitals gating and state machine logic are unchanged.
+Light telemetry is passive-only and does not change command semantics.
 
 ---
 
@@ -188,3 +207,9 @@ Required paired components:
 2. Updated host parser: `src/healthy_heartrate_breathing/profiles/_healthy_heartrate_breathing_locked_profile/mmWave.py`
 
 If either side is old, communication will fail.
+
+---
+
+## 9) Firmware dependencies
+
+- Arduino BH1750 library (`BH1750.h`) is required for `EVT_LIGHT`.

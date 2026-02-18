@@ -15,6 +15,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
     EVT_BIO,
     EVT_PONG,
+    EVT_LIGHT,
     EVT_STATE,
     CMD_SET_HM,
     ERR_BAD_LEN,
@@ -91,6 +92,10 @@ def _pack_targets_single(
     )
     target = struct.pack("<hhhHhh", cluster, x_mm, y_mm, r_mm, bearing_cdeg, v_x10)
     return header + target
+
+
+def _pack_light(*, t_ms: int, valid: int, lux: float) -> bytes:
+    return struct.pack("<IBf", t_ms, valid, lux)
 
 
 class FakeSerial:
@@ -238,6 +243,27 @@ def test_bio_null_sentinel_decodes_to_none() -> None:
     assert event["hr"] is None
 
 
+def test_light_valid_decodes_float_lux() -> None:
+    payload = _pack_light(t_ms=456, valid=1, lux=123.45)
+    event = decode_event(EVT_LIGHT, payload)
+    assert event["type"] == "light"
+    assert event["valid"] == 1
+    assert event["lux"] == pytest.approx(123.45, rel=1e-6)
+
+
+def test_light_invalid_nan_decodes_to_none() -> None:
+    payload = _pack_light(t_ms=789, valid=0, lux=float("nan"))
+    event = decode_event(EVT_LIGHT, payload)
+    assert event["type"] == "light"
+    assert event["valid"] == 0
+    assert event["lux"] is None
+
+
+def test_light_bad_payload_len_raises_protocol_error() -> None:
+    with pytest.raises(ProtocolError):
+        decode_event(EVT_LIGHT, b"\x01\x02")
+
+
 @pytest.mark.asyncio
 async def test_measure_mode_sends_binary_commands_and_parses_bio(monkeypatch: pytest.MonkeyPatch) -> None:
     bio_payload = _pack_bio(t_ms=100, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1240, hr_centi=6900)
@@ -329,6 +355,42 @@ async def test_unsupported_version_frame_is_ignored(monkeypatch: pytest.MonkeyPa
 
     assert response["status"] == "ok"
     assert response["measure"]["valid_bio"]["heart_rate_bpm"] == 68.1
+
+
+@pytest.mark.asyncio
+async def test_locate_and_measure_ignores_light_event_in_mixed_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    targets_payload = _pack_targets_single(
+        t_ms=1000,
+        forced_focus=-1,
+        cluster=3,
+        x_mm=20,
+        y_mm=800,
+        r_mm=801,
+        bearing_cdeg=150,
+        v_x10=0,
+    )
+    light_payload = _pack_light(t_ms=1100, valid=1, lux=42.0)
+    bio_payload = _pack_bio(t_ms=1200, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1325, hr_centi=7750)
+    stream = (
+        encode_frame(EVT_TARGETS, targets_payload, seq=100)
+        + encode_frame(EVT_LIGHT, light_payload, seq=101)
+        + encode_frame(EVT_BIO, bio_payload, seq=102)
+    )
+    _patch_serial_modules(monkeypatch, [{"bytes": stream, "read_chunk_size": 4}])
+
+    tool = MmWave()
+    response = await tool(
+        _deps(),
+        mode="locate_and_measure",
+        duration_s=0.1,
+        measure_duration_s=0.1,
+        sweep_if_unseen=False,
+    )
+
+    assert response["status"] == "ok"
+    assert response["scan"]["latest_target"]["cluster"] == 3
+    assert response["measure"]["success"] is True
+    assert response["measure"]["valid_bio"]["heart_rate_bpm"] == 77.5
 
 
 @pytest.mark.asyncio

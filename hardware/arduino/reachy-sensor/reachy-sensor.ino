@@ -6,6 +6,8 @@
 #include <Arduino.h>
 #include <math.h>
 #include <string.h>
+#include <Wire.h>
+#include <BH1750.h>
 
 #include "Seeed_Arduino_mmWave.h"
 
@@ -32,6 +34,7 @@
 #endif
 
 SEEED_MR60BHA2 mmWave;
+BH1750 lightSensor;
 
 // -----------------------------
 // Binary protocol constants
@@ -53,6 +56,7 @@ static const uint8_t EVT_HELLO = 0x90;
 static const uint8_t EVT_STATE = 0x91;
 static const uint8_t EVT_TARGETS = 0x92;
 static const uint8_t EVT_BIO = 0x93;
+static const uint8_t EVT_LIGHT = 0x94;
 
 // ACK status codes
 static const uint8_t ACK_OK = 0;
@@ -125,6 +129,8 @@ static const float SIT_STAND_THRESHOLD_CM = 55.0f;
 // Output throttles
 static const uint32_t TARGETS_MS_DEFAULT = 250;
 static const uint32_t BIO_MS_DEFAULT = 1000;
+static const uint32_t LIGHT_MS_DEFAULT = 1000;
+static const uint8_t BH1750_I2C_ADDR = 0x23;
 
 // -----------------------------
 // Globals
@@ -143,8 +149,10 @@ static bool seenSingleTarget = false;
 static uint32_t lastTargetsEmitMs = 0;
 static uint32_t lastBioEmitMs = 0;
 static uint32_t lastStateEmitMs = 0;
+static uint32_t lastLightEmitMs = 0;
 
 static bool hostHeadMoving = false;
+static bool lightSensorReady = false;
 static int forcedFocusCluster = -1;
 
 static uint32_t TARGETS_MS = TARGETS_MS_DEFAULT;
@@ -210,6 +218,12 @@ static void appendU32LE(uint8_t* buf, size_t* idx, uint32_t value) {
 
 static void appendI32LE(uint8_t* buf, size_t* idx, int32_t value) {
   appendU32LE(buf, idx, (uint32_t)value);
+}
+
+static void appendF32LE(uint8_t* buf, size_t* idx, float value) {
+  uint32_t raw = 0;
+  memcpy(&raw, &value, sizeof(raw));
+  appendU32LE(buf, idx, raw);
 }
 
 static uint16_t readU16LE(const uint8_t* buf) {
@@ -386,6 +400,14 @@ static void emitBio(uint32_t t_ms, bool allowed, bool valid, float br, bool br_o
   appendU16LE(txPayloadBuf, &n, brWire);
   appendU16LE(txPayloadBuf, &n, hrWire);
   sendFrame(EVT_BIO, txPayloadBuf, n);
+}
+
+static void emitLight(uint32_t t_ms, bool valid, float lux) {
+  size_t n = 0;
+  appendU32LE(txPayloadBuf, &n, t_ms);
+  appendU8(txPayloadBuf, &n, valid ? 1 : 0);
+  appendF32LE(txPayloadBuf, &n, valid ? lux : NAN);
+  sendFrame(EVT_LIGHT, txPayloadBuf, n);
 }
 
 static void emitTargets(uint32_t t_ms, const PeopleCounting& info, const FocusTarget& focus) {
@@ -642,6 +664,9 @@ void setup() {
   Serial.begin(115200);
   delay(200);
 
+  Wire.begin();
+  lightSensorReady = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_I2C_ADDR, &Wire);
+
   mmWave.begin(&mmWaveSerial);
 
   t0 = millis();
@@ -651,6 +676,19 @@ void setup() {
 void loop() {
   // Process host commands continuously, independent of sensor update timing.
   pollHostUsbSerial();
+
+  uint32_t lightNow = millis();
+  if (lightNow - lastLightEmitMs >= LIGHT_MS_DEFAULT) {
+    lastLightEmitMs = lightNow;
+    float lux = NAN;
+    bool lightValid = false;
+    if (lightSensorReady) {
+      lux = lightSensor.readLightLevel();
+      lightValid = isfinite(lux) && lux >= 0.0f;
+    }
+    emitLight(lightNow - t0, lightValid, lux);
+  }
+
   if (!mmWave.update(100)) return;
 
   bool headMoving = hostHeadMoving;

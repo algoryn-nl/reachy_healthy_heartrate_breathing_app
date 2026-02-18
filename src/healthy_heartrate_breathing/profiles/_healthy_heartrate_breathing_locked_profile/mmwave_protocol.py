@@ -1,6 +1,7 @@
 """Binary protocol helpers for Reachy mmWave transport."""
 
 from __future__ import annotations
+import math
 import struct
 from typing import Any
 
@@ -22,6 +23,7 @@ EVT_HELLO = 0x90
 EVT_STATE = 0x91
 EVT_TARGETS = 0x92
 EVT_BIO = 0x93
+EVT_LIGHT = 0x94
 
 # ACK status codes
 ACK_OK = 0
@@ -253,6 +255,22 @@ def decode_event(msg_type: int, payload: bytes) -> dict[str, Any]:
             "br_new": int(br_new),
             "hr": hr,
             "hr_new": int(hr_new),
+        }
+
+    if msg_type == EVT_LIGHT:
+        if len(payload) != 9:
+            raise ProtocolError("bad light payload length")
+        t_ms, valid, lux = struct.unpack("<IBf", payload)
+        lux_out: float | None
+        if int(valid) == 0 or not math.isfinite(lux):
+            lux_out = None
+        else:
+            lux_out = float(lux)
+        return {
+            "type": "light",
+            "t_ms": t_ms,
+            "valid": int(valid),
+            "lux": lux_out,
         }
 
     if msg_type == EVT_TARGETS:
