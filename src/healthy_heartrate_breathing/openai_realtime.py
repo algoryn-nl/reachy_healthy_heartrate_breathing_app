@@ -3,6 +3,7 @@ import base64
 import random
 import asyncio
 import logging
+import os
 from typing import Any, Final, Tuple, Literal, Optional
 from pathlib import Path
 from datetime import datetime
@@ -53,6 +54,107 @@ def _compute_response_cost(usage: Any) -> float:
     return cost
 
 
+def _short_text(value: Any, limit: int = 220) -> str:
+    """Render value as a compact single-line string for logs."""
+    text = str(value).replace("\n", " ")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
+def _safe_parse_args(args_json: str) -> dict[str, Any]:
+    """Parse tool args json and always return an object."""
+    try:
+        parsed = json.loads(args_json or "{}")
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _env_float(name: str, default: float, *, min_value: float | None = None, max_value: float | None = None) -> float:
+    """Read a float from env, with bounds and fallback logging."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        logger.warning("Invalid float for %s=%r, using default=%.3f", name, raw, default)
+        return default
+
+    if min_value is not None and value < min_value:
+        logger.warning("Environment value for %s=%r below minimum %s; using %.3f", name, raw, min_value, min_value)
+        return float(min_value)
+    if max_value is not None and value > max_value:
+        logger.warning("Environment value for %s=%r above maximum %s; using %.3f", name, raw, max_value, max_value)
+        return float(max_value)
+    return value
+
+
+def _env_int(name: str, default: int, *, min_value: int | None = None, max_value: int | None = None) -> int:
+    """Read an int from env, with bounds and fallback logging."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        value = int(float(raw.strip()))
+    except ValueError:
+        logger.warning("Invalid int for %s=%r, using default=%s", name, raw, default)
+        return default
+
+    if min_value is not None and value < min_value:
+        logger.warning("Environment value for %s=%r below minimum %s; using %s", name, raw, min_value, min_value)
+        return min_value
+    if max_value is not None and value > max_value:
+        logger.warning("Environment value for %s=%r above maximum %s; using %s", name, raw, max_value, max_value)
+        return max_value
+    return value
+
+
+def _mmwave_has_target(result: Any) -> bool:
+    """Return True when mmWave output indicates a detected target/person."""
+    if not isinstance(result, dict):
+        return False
+
+    scan = result.get("scan")
+    if isinstance(scan, dict):
+        latest = scan.get("latest_target")
+        if isinstance(latest, dict):
+            return True
+        recent = scan.get("recent_targets")
+        if isinstance(recent, list) and len(recent) > 0:
+            return True
+
+    measure = result.get("measure")
+    if isinstance(measure, dict) and bool(measure.get("success")):
+        return True
+
+    return False
+
+
+def _mmwave_is_no_target(result: Any) -> bool:
+    """Best-effort classification of a clean no-target mmWave result."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("error"):
+        return False
+    if _mmwave_has_target(result):
+        return False
+
+    scan = result.get("scan")
+    if not isinstance(scan, dict):
+        return False
+
+    latest = scan.get("latest_target")
+    if latest is None:
+        return True
+
+    targets_seen = scan.get("targets_seen")
+    return isinstance(targets_seen, int) and targets_seen <= 0
+
+
 class OpenaiRealtimeHandler(AsyncStreamHandler):
     """An OpenAI realtime handler for fastrtc Stream."""
 
@@ -98,9 +200,58 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Cost tracking
         self.cumulative_cost: float = 0.0
 
+        # Idle scanning policy (calm by default):
+        # - passive probe every ~40s
+        # - run a sweep only after repeated misses
+        # - cooldown between sweeps
+        # - stay quiet for a short window after a confirmed focus
+        self._idle_default_interval_s = _env_float(
+            "HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S", 15.0, min_value=1.0
+        )
+        self._idle_mmwave_probe_interval_s = _env_float(
+            "HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S", 40.0, min_value=1.0
+        )
+        self._idle_mmwave_probe_duration_s = _env_float(
+            "HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S", 5.0, min_value=0.5
+        )
+        self._idle_mmwave_misses_before_sweep = _env_int(
+            "HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP", 3, min_value=1
+        )
+        self._idle_mmwave_sweep_cooldown_s = _env_float(
+            "HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S", 150.0, min_value=1.0
+        )
+        self._idle_mmwave_consecutive_misses = 0
+        self._idle_mmwave_last_sweep_time: float | None = None
+        self._idle_mmwave_last_focus_time: float | None = None
+        self._idle_mmwave_post_focus_quiet_s = _env_float(
+            "HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S", 45.0, min_value=0.0
+        )
+        logger.info(
+            "mmWave idle policy: default_idle=%.1fs, probe_interval=%.1fs, probe_duration=%.1fs, "
+            "misses_before_sweep=%d, sweep_cooldown=%.1fs, post_focus_quiet=%.1fs",
+            self._idle_default_interval_s,
+            self._idle_mmwave_probe_interval_s,
+            self._idle_mmwave_probe_duration_s,
+            self._idle_mmwave_misses_before_sweep,
+            self._idle_mmwave_sweep_cooldown_s,
+            self._idle_mmwave_post_focus_quiet_s,
+        )
+
     def copy(self) -> "OpenaiRealtimeHandler":
         """Create a copy of the handler."""
         return OpenaiRealtimeHandler(self.deps, self.gradio_mode, self.instance_path)
+
+    def _has_tool(self, name: str) -> bool:
+        """Return whether a given tool name is available in this session."""
+        return any(spec.get("name") == name for spec in get_tool_specs())
+
+    def _idle_mmwave_sweep_allowed(self, now: float) -> bool:
+        """Decide whether the next idle mmWave call may include a sweep."""
+        if self._idle_mmwave_consecutive_misses < self._idle_mmwave_misses_before_sweep:
+            return False
+        if self._idle_mmwave_last_sweep_time is None:
+            return True
+        return (now - self._idle_mmwave_last_sweep_time) >= self._idle_mmwave_sweep_cooldown_s
 
     async def apply_personality(self, profile: str | None) -> str:
         """Apply a new personality (profile) at runtime if possible.
@@ -409,13 +560,74 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         logger.error("Invalid tool call: tool_name=%s, args=%s", tool_name, args_json_str)
                         continue
 
-                    try:
-                        tool_result = await dispatch_tool_call(tool_name, args_json_str, self.deps)
-                        logger.debug("Tool '%s' executed successfully", tool_name)
-                        logger.debug("Tool result: %s", tool_result)
-                    except Exception as e:
-                        logger.error("Tool '%s' failed", tool_name)
-                        tool_result = {"error": str(e)}
+                    logger.info("Tool requested: %s args=%s", tool_name, _short_text(args_json_str))
+
+                    effective_args_json = args_json_str
+                    idle_mmwave_sweep_used = False
+                    tool_result: dict[str, Any]
+
+                    # Deterministic idle policy: if mmWave is available, idle tool calls
+                    # are constrained to passive mmWave probing only.
+                    if self.is_idle_tool_call and self._has_tool("mmWave") and tool_name != "mmWave":
+                        tool_result = {
+                            "status": "skipped",
+                            "reason": (
+                                f"idle tool '{tool_name}' suppressed; "
+                                "using passive mmWave idle policy"
+                            ),
+                        }
+                        logger.info("Idle policy suppressed tool: %s", tool_name)
+                    else:
+                        if self.is_idle_tool_call and tool_name == "mmWave":
+                            now = asyncio.get_event_loop().time()
+                            idle_args = _safe_parse_args(args_json_str)
+                            idle_mmwave_sweep_used = self._idle_mmwave_sweep_allowed(now)
+                            idle_args["mode"] = "locate_and_measure"
+                            idle_args["duration_s"] = self._idle_mmwave_probe_duration_s
+                            idle_args["sweep_if_unseen"] = idle_mmwave_sweep_used
+                            effective_args_json = json.dumps(idle_args)
+                            if idle_mmwave_sweep_used:
+                                self._idle_mmwave_last_sweep_time = now
+                            logger.info(
+                                "Idle mmWave policy: misses=%d/%d, sweep_if_unseen=%s, args=%s",
+                                self._idle_mmwave_consecutive_misses,
+                                self._idle_mmwave_misses_before_sweep,
+                                idle_mmwave_sweep_used,
+                                _short_text(effective_args_json),
+                            )
+
+                        try:
+                            tool_result = await dispatch_tool_call(tool_name, effective_args_json, self.deps)
+                            logger.debug("Tool '%s' executed successfully", tool_name)
+                            logger.debug("Tool result: %s", tool_result)
+                        except Exception as e:
+                            logger.error("Tool '%s' failed", tool_name)
+                            tool_result = {"error": str(e)}
+
+                    if self.is_idle_tool_call and tool_name == "mmWave":
+                        now = asyncio.get_event_loop().time()
+                        if isinstance(tool_result, dict) and tool_result.get("error"):
+                            logger.warning("Idle mmWave failed: %s", _short_text(tool_result.get("error")))
+                        elif _mmwave_has_target(tool_result):
+                            self._idle_mmwave_consecutive_misses = 0
+                            self._idle_mmwave_last_focus_time = now
+                            logger.info("Idle mmWave detected a target; miss counter reset.")
+                        elif _mmwave_is_no_target(tool_result):
+                            if idle_mmwave_sweep_used:
+                                self._idle_mmwave_consecutive_misses = 0
+                                logger.info("Idle mmWave sweep found no target; miss counter reset.")
+                            else:
+                                self._idle_mmwave_consecutive_misses += 1
+                                logger.info(
+                                    "Idle mmWave no target (miss %d/%d before sweep).",
+                                    self._idle_mmwave_consecutive_misses,
+                                    self._idle_mmwave_misses_before_sweep,
+                                )
+                        else:
+                            logger.info(
+                                "Idle mmWave inconclusive; miss counter unchanged at %d.",
+                                self._idle_mmwave_consecutive_misses,
+                            )
 
                     # send the tool result back
                     if isinstance(call_id, str):
@@ -551,15 +763,25 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # This is called periodically by the fastrtc Stream
 
         # Handle idle
-        idle_duration = asyncio.get_event_loop().time() - self.last_activity_time
-        if idle_duration > 15.0 and self.deps.movement_manager.is_idle():
+        now = asyncio.get_event_loop().time()
+        has_mmwave = self._has_tool("mmWave")
+        idle_interval = self._idle_mmwave_probe_interval_s if has_mmwave else self._idle_default_interval_s
+        idle_duration = now - self.last_activity_time
+        if idle_duration > idle_interval and self.deps.movement_manager.is_idle():
+            if has_mmwave and self._idle_mmwave_last_focus_time is not None:
+                since_focus = now - self._idle_mmwave_last_focus_time
+                if since_focus < self._idle_mmwave_post_focus_quiet_s:
+                    remaining = self._idle_mmwave_post_focus_quiet_s - since_focus
+                    logger.debug("Idle mmWave quiet window active (%.1fs remaining); staying still.", remaining)
+                    self.last_activity_time = now
+                    return None
             try:
                 await self.send_idle_signal(idle_duration)
             except Exception as e:
                 logger.warning("Idle signal skipped (connection closed?): %s", e)
                 return None
 
-            self.last_activity_time = asyncio.get_event_loop().time()  # avoid repeated resets
+            self.last_activity_time = now  # avoid repeated resets
 
         return await wait_for_item(self.output_queue)  # type: ignore[no-any-return]
 
@@ -669,7 +891,43 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         """Send an idle signal to the openai server."""
         logger.debug("Sending idle signal")
         self.is_idle_tool_call = True
-        timestamp_msg = f"[Idle time update: {self.format_timestamp()} - No activity for {idle_duration:.1f}s] You've been idle for a while. Feel free to get creative - dance, show an emotion, look around, do nothing, or just be yourself!"
+        has_mmwave = self._has_tool("mmWave")
+        if has_mmwave:
+            now = asyncio.get_event_loop().time()
+            sweep_allowed = self._idle_mmwave_sweep_allowed(now)
+            if sweep_allowed:
+                strategy = "run one slow scan sweep if no target is found"
+                sweep_flag = "true"
+            else:
+                strategy = "do a passive check only and stay still if no target is found"
+                sweep_flag = "false"
+            timestamp_msg = (
+                f"[Idle time update: {self.format_timestamp()} - No activity for {idle_duration:.1f}s] "
+                "Do one calm wellness scan cycle."
+            )
+            idle_instructions = (
+                "You MUST respond with function calls only - no speech or text. "
+                f"Call mmWave exactly once with mode='locate_and_measure', duration_s={self._idle_mmwave_probe_duration_s}, "
+                f"sweep_if_unseen={sweep_flag}. Then stop. "
+                f"Current strategy: {strategy}. "
+                "Do not call dance, play_emotion, or sweep_look for this idle cycle."
+            )
+            logger.info(
+                "Idle schedule: mmWave probe (misses=%d/%d, sweep_allowed=%s)",
+                self._idle_mmwave_consecutive_misses,
+                self._idle_mmwave_misses_before_sweep,
+                sweep_allowed,
+            )
+        else:
+            timestamp_msg = (
+                f"[Idle time update: {self.format_timestamp()} - No activity for {idle_duration:.1f}s] "
+                "You've been idle for a while. Feel free to get creative - dance, show an emotion, "
+                "look around, do nothing, or just be yourself!"
+            )
+            idle_instructions = (
+                "You MUST respond with function calls only - no speech or text. "
+                "Choose appropriate actions for idle behavior."
+            )
         if not self.connection:
             logger.debug("No connection, cannot send idle signal")
             return
@@ -682,7 +940,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         )
         await self.connection.response.create(
             response={
-                "instructions": "You MUST respond with function calls only - no speech or text. Choose appropriate actions for idle behavior.",
+                "instructions": idle_instructions,
                 "tool_choice": "required",
             },
         )
