@@ -132,13 +132,21 @@ class MmWave(Tool):
 
     def _send_command(self, ser: Any, tx_state: Dict[str, int], msg_type: int, payload: bytes = b"") -> None:
         frame = encode_frame(msg_type=msg_type, payload=payload, seq=self._next_tx_seq(tx_state), version=PROTO_VERSION)
-        ser.write(frame)
-        ser.flush()
+        try:
+            ser.write(frame)
+            ser.flush()
+        except OSError as exc:
+            logger.warning("Serial write failed (msg_type=0x%02X): %s", msg_type, exc)
+            raise
 
     def _poll_events(self, ser: Any, rx_buffer: bytearray) -> list[Dict[str, Any]]:
-        in_waiting = getattr(ser, "in_waiting", 0)
-        read_size = in_waiting if isinstance(in_waiting, int) and in_waiting > 0 else 1
-        chunk = ser.read(read_size)
+        try:
+            in_waiting = getattr(ser, "in_waiting", 0)
+            read_size = in_waiting if isinstance(in_waiting, int) and in_waiting > 0 else 1
+            chunk = ser.read(read_size)
+        except OSError as exc:
+            logger.warning("Serial read failed: %s", exc)
+            raise
         if not chunk:
             return []
 
@@ -321,13 +329,20 @@ class MmWave(Tool):
         if do_sweep:
             self._queue_short_sweep(deps)
 
-        self._send_command(ser, tx_state, CMD_SET_HM, pack_cmd_set_hm(1))
-        self._send_command(ser, tx_state, CMD_SET_TARGETS_MS, pack_cmd_set_targets_ms(targets_ms))
-        if focus_cluster >= 0:
-            self._send_command(ser, tx_state, CMD_SET_FOCUS, pack_cmd_set_focus(focus_cluster))
+        try:
+            self._send_command(ser, tx_state, CMD_SET_HM, pack_cmd_set_hm(1))
+            self._send_command(ser, tx_state, CMD_SET_TARGETS_MS, pack_cmd_set_targets_ms(targets_ms))
+            if focus_cluster >= 0:
+                self._send_command(ser, tx_state, CMD_SET_FOCUS, pack_cmd_set_focus(focus_cluster))
+        except OSError:
+            state["light_summary"] = self._summarize_light(state["light_samples"])
+            return state
 
         while time.monotonic() < timeout:
-            events = self._poll_events(ser, rx_buffer)
+            try:
+                events = self._poll_events(ser, rx_buffer)
+            except OSError:
+                break
             if not events:
                 continue
 
@@ -391,14 +406,21 @@ class MmWave(Tool):
             "success": False,
         }
 
-        if focus_cluster >= 0:
-            self._send_command(ser, tx_state, CMD_SET_FOCUS, pack_cmd_set_focus(focus_cluster))
-        self._send_command(ser, tx_state, CMD_SET_HM, pack_cmd_set_hm(0))
-        self._send_command(ser, tx_state, CMD_SET_BIO_MS, pack_cmd_set_bio_ms(bio_ms))
+        try:
+            if focus_cluster >= 0:
+                self._send_command(ser, tx_state, CMD_SET_FOCUS, pack_cmd_set_focus(focus_cluster))
+            self._send_command(ser, tx_state, CMD_SET_HM, pack_cmd_set_hm(0))
+            self._send_command(ser, tx_state, CMD_SET_BIO_MS, pack_cmd_set_bio_ms(bio_ms))
+        except OSError:
+            result["light_summary"] = self._summarize_light(result["light_samples"])
+            return result
 
         timeout = time.monotonic() + timeout_s
         while time.monotonic() < timeout:
-            events = self._poll_events(ser, rx_buffer)
+            try:
+                events = self._poll_events(ser, rx_buffer)
+            except OSError:
+                break
             if not events:
                 continue
 
