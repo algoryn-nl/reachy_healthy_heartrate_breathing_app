@@ -52,12 +52,17 @@ uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --form
 
 ### Realtime Audio Loop
 
-`openai_realtime.py:OpenaiRealtimeHandler` extends `fastrtc.AsyncStreamHandler`:
-- **receive()**: microphone frames -> resample to 24kHz mono -> send to OpenAI
-- **emit()**: polls output queue for audio deltas and `AdditionalOutputs` (transcripts, tool results)
-- **idle loop**: when no activity for N seconds, sends an idle signal that triggers tool calls (mmWave probing)
-- Manages WebSocket reconnection with exponential backoff
-- Tracks OpenAI API cost per response
+`openai_realtime.py:OpenaiRealtimeHandler` extends `fastrtc.AsyncStreamHandler` and owns the WebSocket lifecycle (reconnection with exponential backoff, per-response cost tracking).
+
+The session logic in `_run_realtime_session()` is decomposed into five handler classes, each receiving closures (not raw WebSocket) via callback injection:
+
+| Handler | File | Responsibility |
+|---------|------|----------------|
+| `AudioRouter` | `audio_router.py` | receive/emit: resample mic frames to 24kHz mono, poll output queue for audio deltas and `AdditionalOutputs` |
+| `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity |
+| `ToolDispatcher` | `tool_dispatcher.py` | Dispatches tool calls from the LLM to the tool registry |
+| `TranscriptHandler` | `transcript_handler.py` | Captures and formats conversation transcripts |
+| `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data |
 
 ### Tool System
 
