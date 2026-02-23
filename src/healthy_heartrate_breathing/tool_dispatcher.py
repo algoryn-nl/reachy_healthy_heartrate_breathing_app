@@ -93,6 +93,7 @@ class ToolDispatcher:
         enqueue_output: Callable[[dict[str, Any]], Awaitable[None]],
         get_camera_frame: Callable[[], np.ndarray | None],
         head_wobbler_reset: Callable[[], None] | None,
+        timeout_s: float = 30.0,
     ) -> None:
         self._idle_policy = idle_policy
         self._light_orchestrator = light_orchestrator
@@ -104,16 +105,75 @@ class ToolDispatcher:
         self._enqueue_output = enqueue_output
         self._get_camera_frame = get_camera_frame
         self._head_wobbler_reset = head_wobbler_reset
+        self._timeout_s = timeout_s
+        self._semaphore = asyncio.Semaphore(1)
+        self._active_task: asyncio.Task[None] | None = None
 
-    async def on_tool_call_done(
+    def dispatch(
         self,
         *,
         tool_name: str,
         args_json: str,
         call_id: str | None,
         is_idle: bool,
-    ) -> bool:
-        """Handle a completed tool call. Returns True if the idle flag was consumed."""
+    ) -> None:
+        """Fire-and-forget tool dispatch. Returns immediately."""
+        asyncio.create_task(
+            self._guarded_run(
+                tool_name=tool_name,
+                args_json=args_json,
+                call_id=call_id,
+                is_idle=is_idle,
+            ),
+            name=f"tool-dispatch-{tool_name}",
+        )
+
+    async def cancel(self) -> None:
+        """Cancel any in-flight tool task (for session teardown)."""
+        task = self._active_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            self._active_task = None
+
+    async def _guarded_run(
+        self,
+        *,
+        tool_name: str,
+        args_json: str,
+        call_id: str | None,
+        is_idle: bool,
+    ) -> None:
+        """Acquire semaphore, track active task, then run tool."""
+        try:
+            async with self._semaphore:
+                self._active_task = asyncio.current_task()
+                try:
+                    await self._run_tool(
+                        tool_name=tool_name,
+                        args_json=args_json,
+                        call_id=call_id,
+                        is_idle=is_idle,
+                    )
+                finally:
+                    self._active_task = None
+        except asyncio.CancelledError:
+            logger.info("Tool dispatch cancelled for '%s'", tool_name)
+        except Exception:
+            logger.exception("Unhandled error in tool dispatch for '%s'", tool_name)
+
+    async def _run_tool(
+        self,
+        *,
+        tool_name: str,
+        args_json: str,
+        call_id: str | None,
+        is_idle: bool,
+    ) -> None:
+        """Execute a tool call with timeout, idle policy, and result handling."""
         logger.info("Tool requested: %s args=%s", tool_name, _short_text(args_json))
 
         effective_args_json = args_json
@@ -151,9 +211,18 @@ class ToolDispatcher:
                 )
 
             try:
-                tool_result = await self._dispatch_tool(tool_name, effective_args_json)
+                tool_result = await asyncio.wait_for(
+                    self._dispatch_tool(tool_name, effective_args_json),
+                    timeout=self._timeout_s,
+                )
                 logger.debug("Tool '%s' executed successfully", tool_name)
                 logger.debug("Tool result: %s", tool_result)
+            except asyncio.TimeoutError:
+                logger.error("Tool '%s' timed out after %.1fs", tool_name, self._timeout_s)
+                tool_result = {"error": f"tool '{tool_name}' timed out after {self._timeout_s:.0f}s"}
+            except asyncio.CancelledError:
+                logger.info("Tool '%s' cancelled", tool_name)
+                return
             except Exception as e:
                 logger.error("Tool '%s' failed", tool_name)
                 tool_result = {"error": str(e)}
@@ -221,8 +290,6 @@ class ToolDispatcher:
         # Reset head wobbler after tool call
         if self._head_wobbler_reset is not None:
             self._head_wobbler_reset()
-
-        return is_idle  # consumed if it was an idle call
 
     async def _handle_camera_result(self, tool_result: dict[str, Any]) -> None:
         """Handle camera tool result: send image to conversation and UI."""
