@@ -8,7 +8,6 @@
 
 ### Upcoming — High Priority
 
-- [ ] Decompose `_run_realtime_session()` (~320 lines) into smaller handlers
 - [ ] Add `asyncio.wait_for()` timeout to tool dispatch (openai_realtime.py:567)
 - [ ] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch)
 - [ ] Fix race condition in antenna blending (moves.py:599-633)
@@ -40,6 +39,7 @@
 
 - [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
 - [x] Advertise light sensor status in HELLO feature bits (2026-02-23)
+- [x] Decompose `_run_realtime_session()` into TranscriptHandler, ToolDispatcher, AudioRouter (2026-02-23)
 - [x] Extract IdlePolicy from openai_realtime handler (2026-02-23)
 - [x] Extract LightOrchestrator from openai_realtime handler (2026-02-23)
 - [x] Add logging to silent exception handlers (2026-02-23)
@@ -57,7 +57,7 @@
 
 ### Technical Debt
 
-- `openai_realtime.py` `_run_realtime_session()` is ~320 lines — decomposition started but not complete
+- `_run_realtime_session()` decomposition complete — 5 handler classes extracted (IdlePolicy, LightOrchestrator, TranscriptHandler, ToolDispatcher, AudioRouter)
 - Tool registry initializes at import time with disk I/O and potential `sys.exit(1)`
 - Test coverage inversely correlates with module size (`openai_realtime.py` worst)
 
