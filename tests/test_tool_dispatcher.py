@@ -49,9 +49,23 @@ def _dispatcher(tmp_path, **overrides: object) -> ToolDispatcher:
         "enqueue_output": AsyncMock(),
         "get_camera_frame": lambda: None,
         "head_wobbler_reset": None,
+        "timeout_s": 5.0,
     }
     defaults.update(overrides)
     return ToolDispatcher(**defaults)
+
+
+async def _dispatch_and_wait(
+    d: ToolDispatcher,
+    *,
+    tool_name: str,
+    args_json: str,
+    call_id: str | None,
+    is_idle: bool,
+) -> None:
+    """Dispatch a tool and wait for it to complete."""
+    d.dispatch(tool_name=tool_name, args_json=args_json, call_id=call_id, is_idle=is_idle)
+    await asyncio.sleep(0.05)
 
 
 class TestNonIdleDispatch:
@@ -61,27 +75,16 @@ class TestNonIdleDispatch:
         send_result = AsyncMock()
         d = _dispatcher(tmp_path, dispatch_tool=dispatch, send_tool_result=send_result)
 
-        consumed = await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json='{"mode":"scan"}',
-            call_id="call-1",
-            is_idle=False,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="call-1", is_idle=False)
         dispatch.assert_called_once()
         send_result.assert_called_once_with("call-1", json.dumps({"answer": 42}))
-        assert consumed is False  # not idle, so flag not consumed
 
     @pytest.mark.asyncio
     async def test_creates_response_for_non_idle(self, tmp_path) -> None:
         create_resp = AsyncMock()
         d = _dispatcher(tmp_path, create_response=create_resp)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json='{"mode":"scan"}',
-            call_id="call-1",
-            is_idle=False,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="call-1", is_idle=False)
         create_resp.assert_called_once()
 
     @pytest.mark.asyncio
@@ -90,12 +93,7 @@ class TestNonIdleDispatch:
         send_result = AsyncMock()
         d = _dispatcher(tmp_path, dispatch_tool=dispatch, send_tool_result=send_result)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=False,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=False)
         call_args = send_result.call_args
         result = json.loads(call_args[0][1])
         assert "error" in result
@@ -113,14 +111,8 @@ class TestIdleDispatch:
             has_tool=lambda name: name == "mmWave",
         )
 
-        consumed = await d.on_tool_call_done(
-            tool_name="dance",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=True,
-        )
+        await _dispatch_and_wait(d, tool_name="dance", args_json="{}", call_id="call-1", is_idle=True)
         dispatch.assert_not_called()
-        assert consumed is True
 
     @pytest.mark.asyncio
     async def test_idle_mmwave_overrides_args(self, tmp_path) -> None:
@@ -128,12 +120,7 @@ class TestIdleDispatch:
         policy = _idle_policy(probe_duration_s=5.0)
         d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json='{"mode":"scan"}',
-            call_id="call-1",
-            is_idle=True,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="call-1", is_idle=True)
         actual_args = json.loads(dispatch.call_args[0][1])
         assert actual_args["mode"] == "locate_and_measure"
         assert actual_args["duration_s"] == 5.0
@@ -143,24 +130,8 @@ class TestIdleDispatch:
         create_resp = AsyncMock()
         d = _dispatcher(tmp_path, create_response=create_resp)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=True,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=True)
         create_resp.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_idle_consumed_flag(self, tmp_path) -> None:
-        d = _dispatcher(tmp_path)
-        consumed = await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=True,
-        )
-        assert consumed is True
 
 
 class TestIdlePolicyIntegration:
@@ -172,12 +143,7 @@ class TestIdlePolicyIntegration:
         dispatch = AsyncMock(return_value=result)
         d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=True,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=True)
         assert policy.consecutive_misses == 0
 
     @pytest.mark.asyncio
@@ -188,12 +154,7 @@ class TestIdlePolicyIntegration:
         dispatch = AsyncMock(return_value=result)
         d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=True,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=True)
         assert policy.consecutive_misses == 1
 
 
@@ -203,12 +164,7 @@ class TestHeadWobblerReset:
         reset = MagicMock()
         d = _dispatcher(tmp_path, head_wobbler_reset=reset)
 
-        await d.on_tool_call_done(
-            tool_name="mmWave",
-            args_json="{}",
-            call_id="call-1",
-            is_idle=False,
-        )
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=False)
         reset.assert_called_once()
 
 
