@@ -176,6 +176,7 @@ def _patch_serial_modules(
 
     monkeypatch.setitem(sys.modules, "serial", serial_module)
     monkeypatch.setitem(sys.modules, "serial.serialutil", serialutil_module)
+    monkeypatch.setenv("MMWAVE_SERIAL_PORT", "/dev/fake_mmwave")
 
 
 def _deps() -> ToolDependencies:
@@ -549,3 +550,187 @@ async def test_invalid_mode_returns_error() -> None:
 
 def test_bad_len_error_code_constant_is_stable() -> None:
     assert ERR_BAD_LEN == 2
+
+
+# ---------------------------------------------------------------------------
+# Serial error path tests
+# ---------------------------------------------------------------------------
+
+
+class FailingSerial:
+    """Fake serial that raises OSError on write or read as configured."""
+
+    def __init__(
+        self,
+        initial_data: bytes = b"",
+        *,
+        fail_write: bool = False,
+        reads_before_disconnect: int | None = None,
+    ) -> None:
+        self._buffer = bytearray(initial_data)
+        self._fail_write = fail_write
+        self._reads_before_disconnect = reads_before_disconnect
+        self._read_count = 0
+        self.writes: list[bytes] = []
+
+    @property
+    def in_waiting(self) -> int:
+        if self._reads_before_disconnect is not None and self._read_count >= self._reads_before_disconnect:
+            raise OSError("USB device disconnected")
+        return len(self._buffer)
+
+    def read(self, size: int = 1) -> bytes:
+        self._read_count += 1
+        if self._reads_before_disconnect is not None and self._read_count > self._reads_before_disconnect:
+            raise OSError("USB device disconnected")
+        if not self._buffer:
+            return b""
+        n = min(size, len(self._buffer))
+        out = bytes(self._buffer[:n])
+        del self._buffer[:n]
+        return out
+
+    def write(self, data: bytes) -> None:
+        if self._fail_write:
+            raise OSError("USB device disconnected")
+        self.writes.append(bytes(data))
+
+    def flush(self) -> None:
+        if self._fail_write:
+            raise OSError("USB device disconnected")
+
+
+def test_send_command_logs_and_reraises_on_write_error() -> None:
+    tool = MmWave()
+    tx_state = {"seq": 0}
+    ser = FailingSerial(fail_write=True)
+
+    with pytest.raises(OSError, match="USB device disconnected"):
+        tool._send_command(ser, tx_state, CMD_SET_HM, b"\x01")
+
+
+def test_poll_events_logs_and_reraises_on_read_error() -> None:
+    tool = MmWave()
+    ser = FailingSerial(reads_before_disconnect=0)
+
+    with pytest.raises(OSError, match="USB device disconnected"):
+        tool._poll_events(ser, bytearray())
+
+
+def test_scan_sync_returns_empty_state_when_initial_commands_fail() -> None:
+    tool = MmWave()
+    ser = FailingSerial(fail_write=True)
+    tx_state = {"seq": 0}
+
+    result = tool._scan_sync(
+        ser,
+        deps=_deps(),
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        duration_s=5.0,
+        do_sweep=False,
+        focus_cluster=-1,
+        targets_ms=250,
+    )
+
+    assert result["targets_seen"] == 0
+    assert result["latest_target"] is None
+    assert "light_summary" in result
+
+
+def test_scan_sync_preserves_partial_data_on_mid_loop_disconnect() -> None:
+    targets_payload = _pack_targets_single(
+        t_ms=1000,
+        forced_focus=-1,
+        cluster=5,
+        x_mm=100,
+        y_mm=500,
+        r_mm=510,
+        bearing_cdeg=200,
+        v_x10=0,
+    )
+    light_payload = _pack_light(t_ms=1100, valid=1, lux=55.0)
+    stream = encode_frame(EVT_TARGETS, targets_payload, seq=1) + encode_frame(EVT_LIGHT, light_payload, seq=2)
+
+    # Deliver all data on first read, then disconnect on second read
+    ser = FailingSerial(stream, reads_before_disconnect=1)
+    tool = MmWave()
+    tx_state = {"seq": 0}
+
+    result = tool._scan_sync(
+        ser,
+        deps=_deps(),
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        duration_s=5.0,
+        do_sweep=False,
+        focus_cluster=-1,
+        targets_ms=250,
+    )
+
+    assert result["targets_seen"] >= 1
+    assert result["latest_target"] is not None
+    assert result["latest_target"]["cluster"] == 5
+    assert result["light_summary"]["valid_samples"] >= 1
+
+
+def test_measure_sync_returns_empty_state_when_initial_commands_fail() -> None:
+    tool = MmWave()
+    ser = FailingSerial(fail_write=True)
+    tx_state = {"seq": 0}
+
+    result = tool._measure_sync(
+        ser,
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        focus_cluster=-1,
+        timeout_s=5.0,
+        bio_ms=1000,
+    )
+
+    assert result["success"] is False
+    assert result["attempts"] == 0
+    assert "light_summary" in result
+
+
+def test_measure_sync_preserves_partial_data_on_mid_loop_disconnect() -> None:
+    # Send one invalid bio event, then disconnect
+    bio_payload = _pack_bio(t_ms=100, allowed=1, valid=0, br_new=0, hr_new=0, br_centi=0xFFFF, hr_centi=0xFFFF)
+    light_payload = _pack_light(t_ms=150, valid=1, lux=42.0)
+    stream = encode_frame(EVT_BIO, bio_payload, seq=1) + encode_frame(EVT_LIGHT, light_payload, seq=2)
+
+    ser = FailingSerial(stream, reads_before_disconnect=1)
+    tool = MmWave()
+    tx_state = {"seq": 0}
+
+    result = tool._measure_sync(
+        ser,
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        focus_cluster=-1,
+        timeout_s=5.0,
+        bio_ms=1000,
+    )
+
+    assert result["success"] is False
+    assert result["attempts"] >= 1
+    assert result["latest_bio"] is not None
+    assert result["light_summary"]["valid_samples"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_full_call_returns_error_on_serial_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_serial_modules(monkeypatch, [{"bytes": b""}])
+    # Make the fake serial raise on write to simulate immediate disconnect
+    original_write = FakeSerial.write
+
+    def _failing_write(self: Any, data: bytes) -> None:
+        raise FakeSerial.SerialException("device removed")
+
+    monkeypatch.setattr(FakeSerial, "write", _failing_write)
+
+    tool = MmWave()
+    response = await tool(_deps(), mode="scan", duration_s=0.1)
+
+    assert "error" in response
+    monkeypatch.setattr(FakeSerial, "write", original_write)
