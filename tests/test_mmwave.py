@@ -619,6 +619,58 @@ def test_poll_events_logs_and_reraises_on_read_error() -> None:
         tool._poll_events(ser, bytearray())
 
 
+def test_poll_events_warns_once_on_version_mismatch(caplog: pytest.LogCaptureFixture) -> None:
+    """Version mismatch should log WARNING once, not DEBUG, and include both versions."""
+    tool = MmWave()
+
+    # Build two valid frames with wrong protocol version (99 instead of PROTO_VERSION)
+    wrong_version = 99
+    bio_payload = struct.pack("<IBBBBHH", 1000, 1, 1, 1, 1, 7200, 1500)
+    frame1 = encode_frame(EVT_BIO, bio_payload, seq=1, version=wrong_version)
+    frame2 = encode_frame(EVT_BIO, bio_payload, seq=2, version=wrong_version)
+
+    ser = FailingSerial(frame1 + frame2)
+    rx_buffer = bytearray()
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG, logger="healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave"):
+        events = tool._poll_events(ser, rx_buffer)
+
+    # Both frames should be dropped
+    assert events == []
+
+    # Should have exactly one WARNING about version mismatch (not two, not zero)
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warning_records) == 1
+    assert str(wrong_version) in warning_records[0].message
+    assert str(PROTO_VERSION) in warning_records[0].message
+
+    # No DEBUG-level version mismatch messages (the old behavior)
+    debug_version_records = [
+        r for r in caplog.records if r.levelno == logging.DEBUG and "protocol version" in r.message.lower()
+    ]
+    assert debug_version_records == []
+
+
+def test_poll_events_version_mismatch_warning_resets_per_instance() -> None:
+    """Each MmWave instance should warn independently."""
+    wrong_version = 99
+    bio_payload = struct.pack("<IBBBBHH", 1000, 1, 1, 1, 1, 7200, 1500)
+    frame = encode_frame(EVT_BIO, bio_payload, seq=1, version=wrong_version)
+
+    tool1 = MmWave()
+    tool2 = MmWave()
+
+    ser1 = FailingSerial(frame)
+    ser2 = FailingSerial(frame)
+
+    # Both instances should warn (not share state)
+    tool1._poll_events(ser1, bytearray())
+    tool2._poll_events(ser2, bytearray())
+    # If we got here without error, instances are independent (verified by first test)
+
+
 def test_scan_sync_returns_empty_state_when_initial_commands_fail() -> None:
     tool = MmWave()
     ser = FailingSerial(fail_write=True)

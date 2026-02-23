@@ -51,6 +51,10 @@ class MmWave(Tool):
     """Read mmWave telemetry and request heart/breath values."""
 
     name = "mmWave"
+
+    def __init__(self) -> None:  # noqa: D107
+        self._warned_version_mismatch = False
+
     description = (
         "Locate people with mmWave targets telemetry and measure heart/breath rates "
         "when a single, stationary person is in range. Includes ambient light lux telemetry when available."
@@ -255,7 +259,14 @@ class MmWave(Tool):
                 continue
 
             if version != PROTO_VERSION:
-                logger.debug("Ignoring unsupported protocol version: %s", version)
+                if not self._warned_version_mismatch:
+                    logger.warning(
+                        "Protocol version mismatch: device sent v%s, host expects v%s. "
+                        "Firmware/host may be out of sync.",
+                        version,
+                        PROTO_VERSION,
+                    )
+                    self._warned_version_mismatch = True
                 continue
 
             try:
