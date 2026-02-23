@@ -13,11 +13,14 @@ from healthy_heartrate_breathing.env_utils import coerce_ms, coerce_int, coerce_
 from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    CMD_PING,
     CMD_SET_HM,
     CMD_SET_FOCUS,
     PROTO_VERSION,
     CMD_SET_BIO_MS,
     CMD_SET_TARGETS_MS,
+    EVT_HELLO,
+    EVT_PONG,
     ProtocolError,
     decode_event,
     decode_frame,
@@ -31,6 +34,12 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
 
 
 logger = logging.getLogger(__name__)
+
+# Device signature for serial port auto-detection (Seeed XIAO ESP32)
+EXPECTED_VID = 0x303A
+EXPECTED_PID = 0x1001
+PROBE_PING_TIMEOUT_S = 0.5
+PROBE_HELLO_TIMEOUT_S = 2.0
 
 
 class MmWave(Tool):
