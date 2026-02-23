@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from reachy_mini.utils import create_head_pose
+from healthy_heartrate_breathing.env_utils import coerce_ms, coerce_int, coerce_float_nonneg
 from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
@@ -32,39 +33,13 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
 logger = logging.getLogger(__name__)
 
 
-def _to_ms(value: Any, default: int) -> int:
-    """Coerce a positive int and clamp to a minimum of 1."""
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(1, parsed)
-
-
-def _to_int_or_default(value: Any, default: int) -> int:
-    """Coerce to int, or return default."""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_float(value: Any, default: float) -> float:
-    """Coerce a float and clamp to a minimum of 0."""
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return default
-    return max(0.0, parsed)
-
-
 class MmWave(Tool):
     """Read mmWave telemetry and request heart/breath values."""
 
     name = "mmWave"
     description = (
         "Locate people with mmWave targets telemetry and measure heart/breath rates "
-        "when a single, stationary person is in range."
+        "when a single, stationary person is in range. Includes ambient light lux telemetry when available."
     )
     parameters_schema = {
         "type": "object",
@@ -99,6 +74,38 @@ class MmWave(Tool):
     DEFAULT_MEASURE_SECONDS = 15
     DEFAULT_TARGETS_MS = 250
     DEFAULT_BIO_MS = 1000
+
+    def _summarize_light(self, samples: list[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build a compact summary of lux samples collected during a call."""
+        valid_lux_values: list[float] = []
+        latest_lux: float | None = None
+        latest_t_ms: int | None = None
+
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            lux = sample.get("lux")
+            if not isinstance(lux, (int, float)):
+                continue
+            lux_f = float(lux)
+            valid_lux_values.append(lux_f)
+            latest_lux = lux_f
+            t_ms = sample.get("t_ms")
+            latest_t_ms = int(t_ms) if isinstance(t_ms, int) else latest_t_ms
+
+        avg_lux = sum(valid_lux_values) / len(valid_lux_values) if valid_lux_values else None
+        min_lux = min(valid_lux_values) if valid_lux_values else None
+        max_lux = max(valid_lux_values) if valid_lux_values else None
+
+        return {
+            "samples": len(samples),
+            "valid_samples": len(valid_lux_values),
+            "latest_lux": latest_lux,
+            "latest_t_ms": latest_t_ms,
+            "avg_lux": avg_lux,
+            "min_lux": min_lux,
+            "max_lux": max_lux,
+        }
 
     def _resolve_serial_port(self, explicit_port: Optional[str]) -> str:
         if explicit_port:
@@ -305,6 +312,8 @@ class MmWave(Tool):
             "targets_seen": 0,
             "latest_target": None,
             "recent_targets": [],
+            "latest_light": None,
+            "light_samples": [],
             "state": None,
             "telemetry": [],
         }
@@ -339,6 +348,15 @@ class MmWave(Tool):
                             break
                 if msg_type == "state":
                     state["state"] = msg.get("state")
+                if msg_type == "light":
+                    state["light_samples"].append(msg)
+                    lux = msg.get("lux")
+                    if isinstance(lux, (int, float)):
+                        state["latest_light"] = {
+                            "t_ms": msg.get("t_ms"),
+                            "valid": msg.get("valid"),
+                            "lux": float(lux),
+                        }
 
             if stop_when_target_found and state["latest_target"] is not None:
                 break
@@ -349,6 +367,7 @@ class MmWave(Tool):
                 if target not in unique:
                     unique.append(target)
             state["recent_targets"] = unique
+        state["light_summary"] = self._summarize_light(state["light_samples"])
         return state
 
     def _measure_sync(
@@ -364,6 +383,8 @@ class MmWave(Tool):
         result: Dict[str, Any] = {
             "attempts": 0,
             "latest_bio": None,
+            "latest_light": None,
+            "light_samples": [],
             "state": None,
             "bio_messages": [],
             "valid_bio": None,
@@ -401,7 +422,18 @@ class MmWave(Tool):
                             "hr_new": msg.get("hr_new"),
                             "br_new": msg.get("br_new"),
                         }
+                        result["light_summary"] = self._summarize_light(result["light_samples"])
                         return result
+                if msg_type == "light":
+                    result["light_samples"].append(msg)
+                    lux = msg.get("lux")
+                    if isinstance(lux, (int, float)):
+                        result["latest_light"] = {
+                            "t_ms": msg.get("t_ms"),
+                            "valid": msg.get("valid"),
+                            "lux": float(lux),
+                        }
+        result["light_summary"] = self._summarize_light(result["light_samples"])
         return result
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
@@ -417,31 +449,31 @@ class MmWave(Tool):
         except ModuleNotFoundError as exc:
             return {"error": f"missing dependency: {exc.name or 'pyserial'}"}
 
-        duration_s = float(_to_float(kwargs.get("duration_s", 0), 0.0))
+        duration_s = float(coerce_float_nonneg(kwargs.get("duration_s", 0), 0.0))
         if mode == "locate_and_measure":
-            duration_s = _to_float(kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS)
-            measure_duration = _to_float(
+            duration_s = coerce_float_nonneg(kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS)
+            measure_duration = coerce_float_nonneg(
                 kwargs.get("measure_duration_s", self.DEFAULT_MEASURE_SECONDS), self.DEFAULT_MEASURE_SECONDS
             )
             do_sweep = bool(kwargs.get("sweep_if_unseen", True))
-            targets_ms = _to_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
-            bio_ms = _to_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
+            targets_ms = coerce_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
+            bio_ms = coerce_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
         elif mode == "scan":
-            duration_s = _to_float(kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS)
+            duration_s = coerce_float_nonneg(kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS)
             measure_duration = 0.0
             do_sweep = bool(kwargs.get("sweep_if_unseen", True))
-            targets_ms = _to_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
-            bio_ms = _to_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
+            targets_ms = coerce_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
+            bio_ms = coerce_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
         else:
             # measure
-            measure_duration = _to_float(
+            measure_duration = coerce_float_nonneg(
                 kwargs.get("duration_s", self.DEFAULT_MEASURE_SECONDS), self.DEFAULT_MEASURE_SECONDS
             )
             do_sweep = False
-            targets_ms = _to_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
-            bio_ms = _to_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
+            targets_ms = coerce_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
+            bio_ms = coerce_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
 
-        focus_cluster = _to_int_or_default(kwargs.get("focus_cluster", -1), -1)
+        focus_cluster = coerce_int(kwargs.get("focus_cluster", -1), -1)
 
         def run_session() -> Dict[str, Any]:
             effective_focus_cluster = focus_cluster

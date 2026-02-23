@@ -5,6 +5,8 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
+from healthy_heartrate_breathing.env_utils import env_flag
+
 
 # Locked profile: set to a profile name (e.g., "astronomer") to lock the app
 # to that profile and disable all profile switching. Leave as None for normal behavior.
@@ -12,26 +14,6 @@ LOCKED_PROFILE: str | None = "_healthy_heartrate_breathing_locked_profile"
 DEFAULT_PROFILES_DIRECTORY = Path(__file__).parent / "profiles"
 
 logger = logging.getLogger(__name__)
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    """Parse a boolean environment flag.
-
-    Accepted truthy values: 1, true, yes, on
-    Accepted falsy values: 0, false, no, off
-    """
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-
-    value = raw.strip().lower()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-
-    logger.warning("Invalid boolean value for %s=%r, using default=%s", name, raw, default)
-    return default
 
 
 def _collect_profile_names(profiles_root: Path) -> set[str]:
@@ -85,7 +67,7 @@ if LOCKED_PROFILE is not None:
         print(f"Error: LOCKED_PROFILE '{LOCKED_PROFILE}' has no instructions.txt", file=sys.stderr)
         sys.exit(1)
 
-_skip_dotenv = _env_flag("REACHY_MINI_SKIP_DOTENV", default=False)
+_skip_dotenv = env_flag("REACHY_MINI_SKIP_DOTENV", default=False)
 
 if _skip_dotenv:
     logger.info("Skipping .env loading because REACHY_MINI_SKIP_DOTENV is set")
@@ -121,7 +103,7 @@ class Config:
     )
     _tools_directory_env = os.getenv("REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY")
     TOOLS_DIRECTORY = Path(_tools_directory_env) if _tools_directory_env else None
-    AUTOLOAD_EXTERNAL_TOOLS = _env_flag("AUTOLOAD_EXTERNAL_TOOLS", default=False)
+    AUTOLOAD_EXTERNAL_TOOLS = env_flag("AUTOLOAD_EXTERNAL_TOOLS", default=False)
     REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
 
     logger.debug(f"Custom Profile: {REACHY_MINI_CUSTOM_PROFILE}")
