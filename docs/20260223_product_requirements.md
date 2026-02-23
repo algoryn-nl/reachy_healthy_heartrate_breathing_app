@@ -37,7 +37,7 @@ Returns:
 
 Vitals gating: heart/breath rates only reported when single-target, still, not head-moving, within near zone (35-150 cm). Guard rails: BR 4-30 bpm, HR 35-200 bpm.
 
-Serial port resolution order: explicit parameter, `MMWAVE_SERIAL_PORT` env var, auto-detect from `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*`.
+Serial port resolution order: explicit parameter, `MMWAVE_SERIAL_PORT` env var, three-tier auto-detection (VID/PID `0x303A:0x1001` for Seeed XIAO ESP32, glob fallback to `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, HELLO probe to disambiguate multiple candidates).
 
 ### 3. Ambient Light Context
 
