@@ -75,6 +75,9 @@ static const uint8_t FLAG_TARGETS_TRUNCATED = 1 << 1;
 
 static const uint8_t MAX_TARGETS_WIRE = 8;
 
+// HELLO feature bits
+static const uint16_t FEAT_LIGHT_SENSOR = 0x0001;
+
 // -----------------------------
 // Types
 // -----------------------------
@@ -361,9 +364,11 @@ static void emitPong(uint32_t t_ms) {
 }
 
 static void emitHello() {
+  uint16_t features = 0;
+  if (lightSensorReady) features |= FEAT_LIGHT_SENSOR;
   size_t n = 0;
   appendU8(txPayloadBuf, &n, PROTO_VERSION);
-  appendU16LE(txPayloadBuf, &n, 0);  // feature bits
+  appendU16LE(txPayloadBuf, &n, features);
   sendFrame(EVT_HELLO, txPayloadBuf, n);
 }
 
