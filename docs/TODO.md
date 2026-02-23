@@ -19,7 +19,6 @@
 - [ ] Reset idle tool call flag on exception path (openai_realtime.py:538-583)
 - [ ] Batch light baseline saves with timer-based flush (light_orchestrator.py:156)
 - [ ] Fix lux extraction path inconsistency (env_utils.py:161-185)
-- [ ] Improve serial port auto-detection with device signature filtering (mmWave.py:118-126)
 - [ ] Refactor tool registry to avoid global side effects at import (core_tools.py:286)
 - [ ] Validate tool loading matches tools.txt expectations (core_tools.py:143-264)
 - [ ] Pin Gradio to stable version (pyproject.toml)
@@ -37,6 +36,7 @@
 
 ### Done
 
+- [x] Improve serial port auto-detection with VID/PID + HELLO probe (2026-02-23)
 - [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
 - [x] Advertise light sensor status in HELLO feature bits (2026-02-23)
 - [x] Decompose `_run_realtime_session()` into TranscriptHandler, ToolDispatcher, AudioRouter (2026-02-23)
