@@ -19,8 +19,6 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     PROTO_VERSION,
     CMD_SET_BIO_MS,
     CMD_SET_TARGETS_MS,
-    EVT_HELLO,
-    EVT_PONG,
     ProtocolError,
     decode_event,
     decode_frame,
@@ -40,6 +38,13 @@ EXPECTED_VID = 0x303A
 EXPECTED_PID = 0x1001
 PROBE_PING_TIMEOUT_S = 0.5
 PROBE_HELLO_TIMEOUT_S = 2.0
+
+try:
+    import serial
+    from serial.tools.list_ports import comports
+except ImportError:
+    serial = None  # type: ignore[assignment]
+    comports = None  # type: ignore[assignment]
 
 
 class MmWave(Tool):
@@ -116,7 +121,8 @@ class MmWave(Tool):
             "max_lux": max_lux,
         }
 
-    def _resolve_serial_port(self, explicit_port: Optional[str]) -> str:
+    def _resolve_serial_port(self, explicit_port: str | None = None) -> str:
+        """Resolve serial port: explicit → env → VID/PID → glob → probe."""
         if explicit_port:
             return explicit_port
 
@@ -124,15 +130,95 @@ class MmWave(Tool):
         if env_port:
             return env_port
 
-        candidates = sorted(
+        # Tier 1: VID/PID match
+        candidates: list[str] = []
+        if comports is not None:
+            for port_info in comports():
+                if port_info.vid == EXPECTED_VID and port_info.pid == EXPECTED_PID:
+                    candidates.append(port_info.device)
+
+        if len(candidates) == 1:
+            logger.info("Auto-detected mmWave port by VID/PID: %s", candidates[0])
+            return candidates[0]
+
+        if len(candidates) > 1:
+            logger.info("Multiple VID/PID matches (%s), probing...", candidates)
+            for candidate in candidates:
+                if self._probe_port(candidate):
+                    return candidate
+            logger.warning("No VID/PID candidate responded to probe, using first: %s", candidates[0])
+            return candidates[0]
+
+        # Tier 2: Glob fallback
+        logger.warning("No VID/PID match found, falling back to glob-based detection")
+        glob_candidates = sorted(
             glob.glob("/dev/cu.usbmodem*")
             + glob.glob("/dev/tty.usbmodem*")
             + glob.glob("/dev/ttyUSB*")
             + glob.glob("/dev/ttyACM*")
         )
-        if not candidates:
+
+        if not glob_candidates:
             raise RuntimeError("No mmWave serial port found. Set MMWAVE_SERIAL_PORT.")
-        return candidates[0]
+
+        if len(glob_candidates) == 1:
+            logger.info("Auto-detected mmWave port by glob: %s", glob_candidates[0])
+            return glob_candidates[0]
+
+        # Tier 3: Probe glob candidates
+        logger.info("Multiple glob candidates (%s), probing...", glob_candidates)
+        for candidate in glob_candidates:
+            if self._probe_port(candidate):
+                return candidate
+
+        logger.warning("No glob candidate responded to probe, using first: %s", glob_candidates[0])
+        return glob_candidates[0]
+
+    def _probe_port(self, port: str) -> bool:
+        """Probe a serial port for our firmware: PING→PONG, then DTR reset→HELLO."""
+        try:
+            ser = serial.Serial(port, 115200, timeout=PROBE_PING_TIMEOUT_S, dsrdtr=False)
+        except (OSError, serial.serialutil.SerialException) as exc:
+            logger.warning("Cannot open %s for probe: %s", port, exc)
+            return False
+
+        try:
+            # Phase 1: send PING, wait for PONG
+            tx_state = {"seq": 0}
+            try:
+                self._send_command(ser, tx_state, CMD_PING)
+            except OSError:
+                pass
+            else:
+                deadline = time.monotonic() + PROBE_PING_TIMEOUT_S
+                rx_buffer = bytearray()
+                while time.monotonic() < deadline:
+                    events = self._poll_events(ser, rx_buffer)
+                    for event in events:
+                        if event.get("type") == "pong":
+                            logger.info("Probe: %s responded to PING", port)
+                            return True
+
+            # Phase 2: toggle DTR to reset, wait for HELLO
+            ser.dtr = True
+            time.sleep(0.05)
+            ser.dtr = False
+
+            deadline = time.monotonic() + PROBE_HELLO_TIMEOUT_S
+            rx_buffer = bytearray()
+            while time.monotonic() < deadline:
+                events = self._poll_events(ser, rx_buffer)
+                for event in events:
+                    if event.get("type") == "hello" and event.get("proto_version") == PROTO_VERSION:
+                        logger.info("Probe: %s responded with HELLO after reset", port)
+                        return True
+        except OSError as exc:
+            logger.warning("Probe error on %s: %s", port, exc)
+        finally:
+            ser.close()
+
+        logger.debug("Probe: %s did not respond", port)
+        return False
 
     def _next_tx_seq(self, tx_state: Dict[str, int]) -> int:
         seq = tx_state["seq"]
