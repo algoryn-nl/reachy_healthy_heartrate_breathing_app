@@ -450,12 +450,17 @@ static void emitTargets(uint32_t t_ms, const PeopleCounting& info, const FocusTa
   appendI16LE(txPayloadBuf, &n, focusBearingCdeg);
   appendI16LE(txPayloadBuf, &n, focusVx10);
   appendU8(txPayloadBuf, &n, flags);
-  appendU8(txPayloadBuf, &n, nWire);
+  // Reserve space for nWire count — we'll fill it after filtering
+  size_t nWireOffset = n;
+  appendU8(txPayloadBuf, &n, 0);  // placeholder
 
+  uint8_t nEncoded = 0;
   for (uint8_t i = 0; i < nWire; i++) {
     const auto& t = info.targets[i];
     float x = t.x_point;
     float y = t.y_point;
+    if (!isfinite(x) || !isfinite(y)) continue;
+
     float r = sqrtf(x * x + y * y);
     float bearing = atan2f(x, y) * 180.0f / PI;
     float v = t.dop_index * RANGE_STEP;
@@ -466,7 +471,11 @@ static void emitTargets(uint32_t t_ms, const PeopleCounting& info, const FocusTa
     appendU16LE(txPayloadBuf, &n, toU16ScaledOrNull(r, 1000.0f));
     appendI16LE(txPayloadBuf, &n, toI16Scaled(bearing, 100.0f));
     appendI16LE(txPayloadBuf, &n, toI16Scaled(v, 10.0f));
+    nEncoded++;
   }
+
+  // Patch the actual count into the reserved slot
+  txPayloadBuf[nWireOffset] = nEncoded;
 
   sendFrame(EVT_TARGETS, txPayloadBuf, n);
 }
