@@ -8,7 +8,6 @@
 
 ### Upcoming — High Priority
 
-- [ ] Add `asyncio.wait_for()` timeout to tool dispatch (openai_realtime.py:567)
 - [ ] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch)
 - [ ] Fix race condition in antenna blending (moves.py:599-633)
 - [ ] Fix session setup exception handling gap (openai_realtime.py:415-417)
@@ -45,6 +44,7 @@
 - [x] Add logging to silent exception handlers (2026-02-23)
 - [x] Consolidate duplicated utility functions into env_utils.py (2026-02-23)
 - [x] Add mmWave env tuning defaults (2026-02-23)
+- [x] Non-blocking tool dispatch with timeout, semaphore, and cancellation (2026-02-23)
 
 ## Notes
 
