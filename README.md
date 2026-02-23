@@ -108,6 +108,7 @@ All configuration is via environment variables. Key variables:
 | `HEALTHY_LIGHT_SHARP_DROP_LUX` | `80` | Lux drop in 60 s to trigger unexpected_darkening |
 | `HEALTHY_LIGHT_PROLONGED_MIN` | `45` | Minutes of low light before strain-risk nudge |
 | `HEALTHY_DISABLED_TOOLS` | *(empty)* | Comma-separated tool names to disable |
+| `HEALTHY_TOOL_DISPATCH_TIMEOUT_S` | `30` | Max seconds per tool call before timeout |
 
 ## Tool System
 
@@ -130,7 +131,7 @@ src/healthy_heartrate_breathing/
   openai_realtime.py        -- WebSocket lifecycle, reconnection, session orchestration
   audio_router.py           -- mic/speaker frame routing (resample, emit audio deltas)
   idle_policy.py            -- idle detection state machine, mmWave probe scheduling
-  tool_dispatcher.py        -- dispatches LLM tool calls to the tool registry
+  tool_dispatcher.py        -- non-blocking tool dispatch with timeout and serialisation
   transcript_handler.py     -- conversation transcript capture and formatting
   light_orchestrator.py     -- auto-invokes light context after mmWave lux data
   tools/

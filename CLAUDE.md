@@ -60,7 +60,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 |---------|------|----------------|
 | `AudioRouter` | `audio_router.py` | receive/emit: resample mic frames to 24kHz mono, poll output queue for audio deltas and `AdditionalOutputs` |
 | `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity |
-| `ToolDispatcher` | `tool_dispatcher.py` | Dispatches tool calls from the LLM to the tool registry |
+| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout |
 | `TranscriptHandler` | `transcript_handler.py` | Captures and formats conversation transcripts |
 | `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data |
 
@@ -158,6 +158,7 @@ Key configuration (see `.env.example`):
 - `REACHY_MINI_CUSTOM_PROFILE` — select a profile (overridden by `LOCKED_PROFILE` in config.py)
 - `MMWAVE_SERIAL_PORT` — override auto-detection of mmWave USB port
 - `HEALTHY_DISABLED_TOOLS` — comma-separated tool names to disable at runtime
+- `HEALTHY_TOOL_DISPATCH_TIMEOUT_S` — tool dispatch timeout in seconds (default 30)
 - `HEALTHY_MM_WAVE_*` — idle scanning policy tuning (intervals, sweep cooldown, etc.)
 - `HEALTHY_LIGHT_*` / `HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED` — light context policy tuning
 
