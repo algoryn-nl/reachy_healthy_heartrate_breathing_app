@@ -112,6 +112,7 @@ The project includes a custom hardware component under `hardware/`.
 **Paired Python components** (firmware and host must match):
 - Protocol codec: `profiles/_healthy_heartrate_breathing_locked_profile/mmwave_protocol.py` — encode/decode frames, COBS, CRC
 - Tool: `profiles/_healthy_heartrate_breathing_locked_profile/mmWave.py` — modes: `scan`, `measure`, `locate_and_measure`; runs serial I/O in `asyncio.to_thread`
+  - Serial port auto-detection: three-tier strategy (VID/PID `0x303A:0x1001` → glob fallback → HELLO probe with `CMD_PING`/`EVT_PONG` or DTR reset → `EVT_HELLO`)
 - Decode utility: `hardware/tools/mmwave_decode.py` — CLI for live serial or capture file decoding (`--format pretty|json`)
 
 **Idle scanning policy** (in `OpenaiRealtimeHandler`):
