@@ -168,6 +168,17 @@ Key configuration (see `.env.example`):
 - Tests do not require a connected robot or OpenAI key
 - The tool registry is module-global and initializes on first import of `core_tools`
 
+## Documentation Maintenance
+
+When completing a feature or fix, **always update all four documentation surfaces**:
+
+1. `CLAUDE.md` — Architecture, env vars, handler table
+2. `README.md` — Project structure, configuration table, user-facing descriptions
+3. `docs/TODO.md` — Move task to Done, update technical debt notes
+4. `docs/20260223_roadmap.md` — Remove from Known Issues, update Future Vision
+
+Do not consider work complete until all relevant docs are synced.
+
 ## Project Documentation
 
 - `docs/TODO.md` — Development log, task tracker, technical debt notes
