@@ -760,3 +760,205 @@ def test_hello_without_light_sensor_feature_bit() -> None:
     event = decode_event(EVT_HELLO, payload)
     assert event["type"] == "hello"
     assert not (event["feature_bits"] & FEAT_LIGHT_SENSOR)
+
+
+# ---------------------------------------------------------------------------
+# Serial port auto-detection tests
+# ---------------------------------------------------------------------------
+
+
+class FakePortInfo:
+    """Mimics serial.tools.list_ports_common.ListPortInfo."""
+
+    def __init__(self, device: str, vid: int | None = None, pid: int | None = None) -> None:
+        self.device = device
+        self.vid = vid
+        self.pid = pid
+
+
+class ProbeSerial:
+    """Fake serial for probe tests — responds to PING with PONG or HELLO after reset."""
+
+    def __init__(
+        self,
+        port: str,
+        baudrate: int = 115200,
+        timeout: float = 0.2,
+        dsrdtr: bool = False,
+        *,
+        respond_pong: bool = False,
+        respond_hello: bool = False,
+    ) -> None:
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.dsrdtr = dsrdtr
+        self._respond_pong = respond_pong
+        self._respond_hello = respond_hello
+        self._dtr_toggled = False
+        self._buffer = bytearray()
+        self._dtr = False
+
+    @property
+    def dtr(self) -> bool:
+        return self._dtr
+
+    @dtr.setter
+    def dtr(self, value: bool) -> None:
+        if not value and self._dtr:
+            self._dtr_toggled = True
+            if self._respond_hello:
+                hello_payload = struct.pack("<BH", PROTO_VERSION, 0)
+                self._buffer.extend(encode_frame(EVT_HELLO, hello_payload, seq=0))
+        self._dtr = value
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffer)
+
+    def write(self, data: bytes) -> None:
+        if self._respond_pong:
+            pong_payload = struct.pack("<I", 0)
+            self._buffer.extend(encode_frame(EVT_PONG, pong_payload, seq=0))
+
+    def flush(self) -> None:
+        pass
+
+    def read(self, size: int = 1) -> bytes:
+        if not self._buffer:
+            return b""
+        n = min(size, len(self._buffer))
+        out = bytes(self._buffer[:n])
+        del self._buffer[:n]
+        return out
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "ProbeSerial":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> bool:
+        return False
+
+
+def test_resolve_explicit_port_bypasses_detection() -> None:
+    tool = MmWave()
+    assert tool._resolve_serial_port("/dev/explicit") == "/dev/explicit"
+
+
+def test_resolve_env_var_bypasses_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MMWAVE_SERIAL_PORT", "/dev/from_env")
+    tool = MmWave()
+    assert tool._resolve_serial_port(None) == "/dev/from_env"
+
+
+def test_resolve_single_vidpid_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MMWAVE_SERIAL_PORT", raising=False)
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.comports",
+        lambda: [
+            FakePortInfo("/dev/cu.other", vid=0x1234, pid=0x5678),
+            FakePortInfo("/dev/cu.usbmodem101", vid=0x303A, pid=0x1001),
+        ],
+    )
+    tool = MmWave()
+    assert tool._resolve_serial_port(None) == "/dev/cu.usbmodem101"
+
+
+def test_resolve_no_vidpid_single_glob(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MMWAVE_SERIAL_PORT", raising=False)
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.comports",
+        lambda: [FakePortInfo("/dev/cu.bluetooth", vid=None, pid=None)],
+    )
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.glob.glob",
+        lambda pattern: ["/dev/cu.usbmodem201"] if "usbmodem" in pattern else [],
+    )
+    tool = MmWave()
+    assert tool._resolve_serial_port(None) == "/dev/cu.usbmodem201"
+
+
+def test_resolve_multiple_vidpid_probe_picks_pong_responder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MMWAVE_SERIAL_PORT", raising=False)
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.comports",
+        lambda: [
+            FakePortInfo("/dev/cu.usbmodem101", vid=0x303A, pid=0x1001),
+            FakePortInfo("/dev/cu.usbmodem201", vid=0x303A, pid=0x1001),
+        ],
+    )
+
+    def fake_serial(port: str, baudrate: int = 115200, timeout: float = 0.2, dsrdtr: bool = False) -> ProbeSerial:
+        return ProbeSerial(port, baudrate, timeout, dsrdtr, respond_pong=(port == "/dev/cu.usbmodem201"))
+
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.serial.Serial",
+        fake_serial,
+    )
+    tool = MmWave()
+    assert tool._resolve_serial_port(None) == "/dev/cu.usbmodem201"
+
+
+def test_resolve_probe_falls_back_to_hello_after_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MMWAVE_SERIAL_PORT", raising=False)
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.comports",
+        lambda: [
+            FakePortInfo("/dev/cu.usbmodem101", vid=0x303A, pid=0x1001),
+            FakePortInfo("/dev/cu.usbmodem201", vid=0x303A, pid=0x1001),
+        ],
+    )
+
+    def fake_serial(port: str, baudrate: int = 115200, timeout: float = 0.2, dsrdtr: bool = False) -> ProbeSerial:
+        return ProbeSerial(port, baudrate, timeout, dsrdtr, respond_hello=(port == "/dev/cu.usbmodem201"))
+
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.serial.Serial",
+        fake_serial,
+    )
+    tool = MmWave()
+    assert tool._resolve_serial_port(None) == "/dev/cu.usbmodem201"
+
+
+def test_resolve_no_candidates_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MMWAVE_SERIAL_PORT", raising=False)
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.comports",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.glob.glob",
+        lambda pattern: [],
+    )
+    tool = MmWave()
+    with pytest.raises(RuntimeError, match="No mmWave serial port found"):
+        tool._resolve_serial_port(None)
+
+
+def test_resolve_probe_skips_port_on_open_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MMWAVE_SERIAL_PORT", raising=False)
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.comports",
+        lambda: [
+            FakePortInfo("/dev/cu.usbmodem101", vid=0x303A, pid=0x1001),
+            FakePortInfo("/dev/cu.usbmodem201", vid=0x303A, pid=0x1001),
+        ],
+    )
+
+    call_count = 0
+
+    def fake_serial(port: str, baudrate: int = 115200, timeout: float = 0.2, dsrdtr: bool = False) -> ProbeSerial:
+        nonlocal call_count
+        call_count += 1
+        if port == "/dev/cu.usbmodem101":
+            raise OSError("permission denied")
+        return ProbeSerial(port, baudrate, timeout, dsrdtr, respond_pong=True)
+
+    monkeypatch.setattr(
+        "healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave.serial.Serial",
+        fake_serial,
+    )
+    tool = MmWave()
+    assert tool._resolve_serial_port(None) == "/dev/cu.usbmodem201"
