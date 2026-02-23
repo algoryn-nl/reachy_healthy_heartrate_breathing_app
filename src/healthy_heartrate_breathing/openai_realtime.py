@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Final, Tuple, Literal, Optional
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -19,7 +19,7 @@ from websockets.exceptions import ConnectionClosedError
 
 from healthy_heartrate_breathing.config import config
 from healthy_heartrate_breathing.prompts import get_session_voice, get_session_instructions
-from healthy_heartrate_breathing.env_utils import env_int, env_flag, env_float, extract_lux_from_mmwave_result
+from healthy_heartrate_breathing.env_utils import env_int, env_flag, env_float
 from healthy_heartrate_breathing.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
@@ -180,30 +180,31 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             self.idle_policy.post_focus_quiet_s,
         )
 
-        # Light-context policy orchestration (optional, suggest-only):
-        self._light_context_auto_enabled = env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True)
-        self._light_analytics_enabled = env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True)
-        self._light_user_id = (os.getenv("HEALTHY_LIGHT_CONTEXT_USER_ID", "default") or "default").strip() or "default"
-        self._light_prefers_dim = env_flag("HEALTHY_LIGHT_PREFERS_DIM", False)
-        self._light_sensitive = env_flag("HEALTHY_LIGHT_SENSITIVE", False)
-        self._light_allow_wellness_nudges = env_flag("HEALTHY_LIGHT_ALLOW_WELLNESS_NUDGES", True)
-        self._light_day_start_hour = env_int("HEALTHY_LIGHT_DAY_START_HOUR", 7, min_value=0, max_value=23)
-        self._light_night_start_hour = env_int("HEALTHY_LIGHT_NIGHT_START_HOUR", 20, min_value=0, max_value=23)
-        self._light_low_lux_threshold = env_float("HEALTHY_LIGHT_LOW_LUX_THRESHOLD", 40.0, min_value=0.0)
-        self._light_baseline_alpha = env_float("HEALTHY_LIGHT_BASELINE_ALPHA", 0.15, min_value=0.01, max_value=1.0)
-        self._light_baseline_min_samples = env_int("HEALTHY_LIGHT_BASELINE_MIN_SAMPLES", 5, min_value=1)
-        self._light_baseline_path = self._resolve_runtime_data_path("light_context_baseline.json")
-        self._light_analytics_path = self._resolve_runtime_data_path("light_context_analytics.jsonl")
-        self._light_baseline_state = self._load_light_baseline_state()
-        self._light_last_lux: float | None = None
-        self._light_last_lux_time: float | None = None
-        self._light_low_since_time: float | None = None
+        # Light-context policy orchestration (delegates to LightOrchestrator)
+        from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
+
+        _light_user_id = (os.getenv("HEALTHY_LIGHT_CONTEXT_USER_ID", "default") or "default").strip() or "default"
+        self.light_orchestrator = LightOrchestrator(
+            enabled=env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True),
+            analytics_enabled=env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True),
+            user_id=_light_user_id,
+            prefers_dim=env_flag("HEALTHY_LIGHT_PREFERS_DIM", False),
+            light_sensitive=env_flag("HEALTHY_LIGHT_SENSITIVE", False),
+            allow_wellness_nudges=env_flag("HEALTHY_LIGHT_ALLOW_WELLNESS_NUDGES", True),
+            day_start_hour=env_int("HEALTHY_LIGHT_DAY_START_HOUR", 7, min_value=0, max_value=23),
+            night_start_hour=env_int("HEALTHY_LIGHT_NIGHT_START_HOUR", 20, min_value=0, max_value=23),
+            low_lux_threshold=env_float("HEALTHY_LIGHT_LOW_LUX_THRESHOLD", 40.0, min_value=0.0),
+            baseline_alpha=env_float("HEALTHY_LIGHT_BASELINE_ALPHA", 0.15, min_value=0.01, max_value=1.0),
+            baseline_min_samples=env_int("HEALTHY_LIGHT_BASELINE_MIN_SAMPLES", 5, min_value=1),
+            baseline_path=self._resolve_runtime_data_path("light_context_baseline.json"),
+            analytics_path=self._resolve_runtime_data_path("light_context_analytics.jsonl"),
+        )
         logger.info(
-            "Light-context policy: auto_enabled=%s, analytics=%s, user_id=%s, baseline=%s",
-            self._light_context_auto_enabled,
-            self._light_analytics_enabled,
-            self._light_user_id,
-            self._light_baseline_path,
+            "Light-context policy: enabled=%s, analytics=%s, user_id=%s, baseline=%s",
+            self.light_orchestrator.enabled,
+            self.light_orchestrator.analytics_enabled,
+            self.light_orchestrator.user_id,
+            self.light_orchestrator.baseline_path,
         )
 
     def copy(self) -> "OpenaiRealtimeHandler":
@@ -218,205 +219,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         """Resolve a writable path for runtime policy/analytics data."""
         base = Path(self.instance_path) if self.instance_path else Path.cwd()
         return base / filename
-
-    def _load_light_baseline_state(self) -> dict[str, Any]:
-        """Load baseline JSON state from disk with safe fallback."""
-        default: dict[str, Any] = {"schema_version": 1, "users": {}}
-        path = self._light_baseline_path
-        try:
-            if not path.exists():
-                return default
-            parsed = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(parsed, dict):
-                return default
-            users = parsed.get("users")
-            if not isinstance(users, dict):
-                parsed["users"] = {}
-            return parsed
-        except Exception as e:
-            logger.warning("Failed loading light baseline state from %s: %s", path, e)
-            return default
-
-    def _save_light_baseline_state(self) -> None:
-        """Persist baseline JSON state to disk."""
-        path = self._light_baseline_path
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._light_baseline_state, ensure_ascii=True, indent=2), encoding="utf-8")
-        except Exception as e:
-            logger.warning("Failed writing light baseline state to %s: %s", path, e)
-
-    def _is_daytime_hour(self, hour: int) -> bool:
-        """Return True for daytime hours using configured day/night cutoffs."""
-        if self._light_day_start_hour == self._light_night_start_hour:
-            return True
-        if self._light_day_start_hour < self._light_night_start_hour:
-            return self._light_day_start_hour <= hour < self._light_night_start_hour
-        # Wrap-around configuration (rare): daytime spans midnight.
-        return hour >= self._light_day_start_hour or hour < self._light_night_start_hour
-
-    def _compute_lux_delta_60s(self, lux: float, now: float) -> float | None:
-        """Estimate lux delta normalized to a 60s window."""
-        if self._light_last_lux is None or self._light_last_lux_time is None:
-            return None
-        dt = now - self._light_last_lux_time
-        if dt < 1.0 or dt > 600.0:
-            return None
-        raw_delta = lux - self._light_last_lux
-        scaled_delta = raw_delta * (60.0 / max(1.0, dt))
-        return float(scaled_delta)
-
-    def _get_or_create_user_baseline_entry(self) -> dict[str, Any]:
-        """Get mutable baseline entry for the configured user id."""
-        users = self._light_baseline_state.setdefault("users", {})
-        if not isinstance(users, dict):
-            users = {}
-            self._light_baseline_state["users"] = users
-        user_entry = users.get(self._light_user_id)
-        if not isinstance(user_entry, dict):
-            user_entry = {"hours": {}, "updated_at": None}
-            users[self._light_user_id] = user_entry
-        hours = user_entry.get("hours")
-        if not isinstance(hours, dict):
-            user_entry["hours"] = {}
-        return user_entry
-
-    def _update_user_lux_baseline(self, lux: float, local_hour: int) -> None:
-        """Update per-user rolling lux baseline for daytime behavior."""
-        if not self._is_daytime_hour(local_hour):
-            return
-        user_entry = self._get_or_create_user_baseline_entry()
-        hours: dict[str, Any] = user_entry["hours"]
-        bucket_key = str(local_hour)
-        bucket = hours.get(bucket_key)
-        if not isinstance(bucket, dict):
-            bucket = {"ema_lux": None, "samples": 0}
-            hours[bucket_key] = bucket
-
-        prev_ema = bucket.get("ema_lux")
-        prev_ema_value = float(prev_ema) if isinstance(prev_ema, (int, float)) else None
-        next_ema = lux if prev_ema_value is None else (self._light_baseline_alpha * lux) + (
-            (1.0 - self._light_baseline_alpha) * prev_ema_value
-        )
-        samples = int(bucket.get("samples", 0)) + 1
-        bucket["ema_lux"] = round(float(next_ema), 3)
-        bucket["samples"] = samples
-        user_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._save_light_baseline_state()
-
-    def _get_user_typical_day_low_lux(self, local_hour: int) -> float | None:
-        """Return a user baseline lux value for personalization."""
-        user_entry = self._get_or_create_user_baseline_entry()
-        hours = user_entry.get("hours")
-        if not isinstance(hours, dict):
-            return None
-
-        bucket = hours.get(str(local_hour))
-        if isinstance(bucket, dict):
-            samples = int(bucket.get("samples", 0))
-            ema = bucket.get("ema_lux")
-            if samples >= self._light_baseline_min_samples and isinstance(ema, (int, float)):
-                return float(ema)
-
-        fallback_values: list[float] = []
-        for hour_str, raw_bucket in hours.items():
-            if not isinstance(raw_bucket, dict):
-                continue
-            try:
-                hour = int(hour_str)
-            except Exception:
-                continue
-            if not self._is_daytime_hour(hour):
-                continue
-            ema = raw_bucket.get("ema_lux")
-            samples = int(raw_bucket.get("samples", 0))
-            if samples > 0 and isinstance(ema, (int, float)):
-                fallback_values.append(float(ema))
-        if not fallback_values:
-            return None
-        return float(sum(fallback_values) / len(fallback_values))
-
-    def _append_light_analytics_event(
-        self,
-        *,
-        source_tool: str,
-        lux: float | None,
-        result: dict[str, Any],
-    ) -> None:
-        """Append one light-context analytics row as JSONL."""
-        if not self._light_analytics_enabled:
-            return
-        payload = {
-            "event": "light_context_decision",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user_id": self._light_user_id,
-            "source_tool": source_tool,
-            "context_state": result.get("context_state"),
-            "recommended_mode": result.get("recommended_mode"),
-            "recommended_actions": result.get("recommended_actions"),
-            "confidence": result.get("confidence"),
-            "cooldown_hint_s": result.get("cooldown_hint_s"),
-            "reason_codes": result.get("reason_codes"),
-            "lux": lux,
-            "observations": result.get("observations"),
-        }
-        path = self._light_analytics_path
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-        except Exception as e:
-            logger.warning("Failed writing light analytics event to %s: %s", path, e)
-
-    async def _run_light_context_from_mmwave(self, mmwave_result: dict[str, Any]) -> dict[str, Any] | None:
-        """Auto-run light_context after mmWave when lux data is available."""
-        if not self._light_context_auto_enabled:
-            return None
-        if not self._has_tool("light_context"):
-            return None
-
-        lux = extract_lux_from_mmwave_result(mmwave_result)
-        if lux is None:
-            return None
-
-        now = asyncio.get_event_loop().time()
-        local_hour = datetime.now().hour
-        lux_delta_60s = self._compute_lux_delta_60s(lux, now)
-
-        if lux <= self._light_low_lux_threshold:
-            if self._light_low_since_time is None:
-                self._light_low_since_time = now
-        else:
-            self._light_low_since_time = None
-
-        low_light_duration_min = (
-            ((now - self._light_low_since_time) / 60.0) if self._light_low_since_time is not None else 0.0
-        )
-        user_typical_day_low_lux = self._get_user_typical_day_low_lux(local_hour)
-
-        args = {
-            "lux": lux,
-            "previous_lux": self._light_last_lux,
-            "lux_delta_60s": lux_delta_60s,
-            "presence_detected": _mmwave_has_target(mmwave_result),
-            "active_interaction": (not self.is_idle_tool_call),
-            "low_light_duration_min": low_light_duration_min,
-            "local_hour": local_hour,
-            "prefers_dim": self._light_prefers_dim,
-            "light_sensitive": self._light_sensitive,
-            "allow_wellness_nudges": self._light_allow_wellness_nudges,
-            "user_typical_day_low_lux": user_typical_day_low_lux,
-            "mmwave_result": mmwave_result,
-        }
-        light_context_result = await dispatch_tool_call("light_context", json.dumps(args), self.deps)
-        if isinstance(light_context_result, dict):
-            self._append_light_analytics_event(source_tool="mmWave", lux=lux, result=light_context_result)
-
-        # Baseline update comes after decision so current reading does not bias its own classification.
-        self._update_user_lux_baseline(lux=lux, local_hour=local_hour)
-        self._light_last_lux = lux
-        self._light_last_lux_time = now
-        return light_context_result if isinstance(light_context_result, dict) else None
 
     async def apply_personality(self, profile: str | None) -> str:
         """Apply a new personality (profile) at runtime if possible.
@@ -782,7 +584,16 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
                     if tool_name == "mmWave" and isinstance(tool_result, dict):
                         try:
-                            auto_light_context = await self._run_light_context_from_mmwave(tool_result)
+
+                            async def _dispatch_light(name: str, args_json: str) -> dict[str, Any]:
+                                return await dispatch_tool_call(name, args_json, self.deps)
+
+                            auto_light_context = await self.light_orchestrator.run_from_mmwave(
+                                tool_result,
+                                is_idle=self.is_idle_tool_call,
+                                has_tool=self._has_tool("light_context"),
+                                dispatch_fn=_dispatch_light,
+                            )
                             if auto_light_context is not None:
                                 tool_result["light_context"] = auto_light_context
                                 logger.info(
