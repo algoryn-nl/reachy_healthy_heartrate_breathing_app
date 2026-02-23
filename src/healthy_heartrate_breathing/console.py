@@ -80,6 +80,7 @@ class LocalStream:
                 try:
                     return env_path.read_text(encoding="utf-8").splitlines()
                 except Exception:
+                    logger.warning("Failed to read .env at %s", env_path, exc_info=True)
                     return []
             template_text = None
             ex = inst / ".env.example"
@@ -87,6 +88,7 @@ class LocalStream:
                 try:
                     template_text = ex.read_text(encoding="utf-8")
                 except Exception:
+                    logger.warning("Failed to read .env.example at %s", ex, exc_info=True)
                     template_text = None
             if template_text is None:
                 try:
@@ -94,6 +96,7 @@ class LocalStream:
                     if cwd_example.exists():
                         template_text = cwd_example.read_text(encoding="utf-8")
                 except Exception:
+                    logger.warning("Failed to read .env.example from cwd", exc_info=True)
                     template_text = None
             if template_text is None:
                 packaged = Path(__file__).parent / ".env.example"
@@ -101,9 +104,11 @@ class LocalStream:
                     try:
                         template_text = packaged.read_text(encoding="utf-8")
                     except Exception:
+                        logger.warning("Failed to read packaged .env.example at %s", packaged, exc_info=True)
                         template_text = None
             return template_text.splitlines() if template_text else []
         except Exception:
+            logger.warning("Unexpected error in _read_env_lines", exc_info=True)
             return []
 
     def _persist_api_key(self, key: str) -> None:
@@ -125,12 +130,12 @@ class LocalStream:
         # Update live process env and config so consumers see it immediately
         try:
             os.environ["OPENAI_API_KEY"] = k
-        except Exception:  # best-effort
-            pass
+        except Exception:
+            logger.debug("Best-effort os.environ OPENAI_API_KEY assignment failed", exc_info=True)
         try:
             config.OPENAI_API_KEY = k
         except Exception:
-            pass
+            logger.warning("Failed to set config.OPENAI_API_KEY", exc_info=True)
 
         if not self._instance_path:
             return
@@ -156,7 +161,7 @@ class LocalStream:
 
                 load_dotenv(dotenv_path=str(env_path), override=True)
             except Exception:
-                pass
+                logger.warning("Failed to reload .env after write at %s", env_path, exc_info=True)
         except Exception as e:
             logger.warning("Failed to persist OPENAI_API_KEY: %s", e)
 
@@ -170,7 +175,7 @@ class LocalStream:
 
             set_custom_profile(selection)
         except Exception:
-            pass
+            logger.warning("Failed to set custom profile to %r", selection, exc_info=True)
 
         if not self._instance_path:
             return
@@ -198,7 +203,7 @@ class LocalStream:
 
                 load_dotenv(dotenv_path=str(env_path), override=True)
             except Exception:
-                pass
+                logger.warning("Failed to reload .env after personality persist at %s", env_path, exc_info=True)
         except Exception as e:
             logger.warning("Failed to persist REACHY_MINI_CUSTOM_PROFILE: %s", e)
 
@@ -215,7 +220,7 @@ class LocalStream:
                         v = val.strip()
                         return v or None
         except Exception:
-            pass
+            logger.warning("Failed to read persisted personality from %s", env_path, exc_info=True)
         return None
 
     def _init_settings_ui_if_needed(self) -> None:
@@ -237,7 +242,7 @@ class LocalStream:
                 # Serve /static/* assets
                 self._settings_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
             except Exception:
-                pass
+                logger.warning("Failed to mount static files from %s", static_dir, exc_info=True)
 
         class ApiKeyPayload(BaseModel):
             openai_api_key: str
@@ -265,6 +270,7 @@ class LocalStream:
                 mod = sys.modules.get("healthy_heartrate_breathing.tools.core_tools")
                 ready = bool(getattr(mod, "_TOOLS_INITIALIZED", False)) if mod else False
             except Exception:
+                logger.debug("Failed to check tools initialization status", exc_info=True)
                 ready = False
             return JSONResponse({"ready": ready})
 
@@ -329,16 +335,16 @@ class LocalStream:
                         try:
                             config.OPENAI_API_KEY = new_key
                         except Exception:
-                            pass
+                            logger.warning("Failed to set config.OPENAI_API_KEY from instance .env", exc_info=True)
                     if LOCKED_PROFILE is None:
                         new_profile = os.getenv("REACHY_MINI_CUSTOM_PROFILE")
                         if new_profile is not None:
                             try:
                                 set_custom_profile(new_profile.strip() or None)
                             except Exception:
-                                pass  # Best-effort profile update
+                                logger.debug("Best-effort profile update from instance .env failed", exc_info=True)
             except Exception:
-                pass  # Instance .env loading is optional; continue with defaults
+                logger.debug("Instance .env loading failed; continuing with defaults", exc_info=True)
 
         # If key is still missing, try to download one from HuggingFace
         if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
@@ -389,7 +395,7 @@ class LocalStream:
                         get_persisted_personality=self._read_persisted_personality,
                     )
             except Exception:
-                pass
+                logger.warning("Failed to mount personality routes", exc_info=True)
             self._tasks = [
                 asyncio.create_task(self.handler.start_up(), name="openai-handler"),
                 asyncio.create_task(self.record_loop(), name="stream-record-loop"),

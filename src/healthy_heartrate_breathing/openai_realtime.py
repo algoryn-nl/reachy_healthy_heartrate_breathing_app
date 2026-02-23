@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Final, Tuple, Literal, Optional
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -19,7 +19,7 @@ from websockets.exceptions import ConnectionClosedError
 
 from healthy_heartrate_breathing.config import config
 from healthy_heartrate_breathing.prompts import get_session_voice, get_session_instructions
-from healthy_heartrate_breathing.env_utils import env_int, env_flag, env_float, extract_lux_from_mmwave_result
+from healthy_heartrate_breathing.env_utils import env_int, env_flag, env_float
 from healthy_heartrate_breathing.tools.core_tools import (
     ToolDependencies,
     get_tool_specs,
@@ -159,67 +159,52 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Cost tracking
         self.cumulative_cost: float = 0.0
 
-        # Idle scanning policy (calm by default):
-        # - passive probe every ~40s
-        # - run a sweep only after repeated misses
-        # - cooldown between sweeps
-        # - stay quiet for a short window after a confirmed focus
-        self._idle_default_interval_s = env_float(
-            "HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S", 15.0, min_value=1.0
-        )
-        self._idle_mmwave_probe_interval_s = env_float(
-            "HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S", 40.0, min_value=1.0
-        )
-        self._idle_mmwave_probe_duration_s = env_float(
-            "HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S", 5.0, min_value=0.5
-        )
-        self._idle_mmwave_misses_before_sweep = env_int(
-            "HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP", 3, min_value=1
-        )
-        self._idle_mmwave_sweep_cooldown_s = env_float(
-            "HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S", 150.0, min_value=1.0
-        )
-        self._idle_mmwave_consecutive_misses = 0
-        self._idle_mmwave_last_sweep_time: float | None = None
-        self._idle_mmwave_last_focus_time: float | None = None
-        self._idle_mmwave_post_focus_quiet_s = env_float(
-            "HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S", 45.0, min_value=0.0
+        # Idle scanning policy (delegates to IdlePolicy)
+        from healthy_heartrate_breathing.idle_policy import IdlePolicy
+
+        self.idle_policy = IdlePolicy(
+            interval_s=env_float("HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S", 15.0, min_value=1.0),
+            probe_interval_s=env_float("HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S", 40.0, min_value=1.0),
+            probe_duration_s=env_float("HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S", 5.0, min_value=0.5),
+            misses_before_sweep=env_int("HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP", 3, min_value=1),
+            sweep_cooldown_s=env_float("HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S", 150.0, min_value=1.0),
+            post_focus_quiet_s=env_float("HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S", 45.0, min_value=0.0),
         )
         logger.info(
-            "mmWave idle policy: default_idle=%.1fs, probe_interval=%.1fs, probe_duration=%.1fs, "
+            "mmWave idle policy: probe_interval=%.1fs, probe_duration=%.1fs, "
             "misses_before_sweep=%d, sweep_cooldown=%.1fs, post_focus_quiet=%.1fs",
-            self._idle_default_interval_s,
-            self._idle_mmwave_probe_interval_s,
-            self._idle_mmwave_probe_duration_s,
-            self._idle_mmwave_misses_before_sweep,
-            self._idle_mmwave_sweep_cooldown_s,
-            self._idle_mmwave_post_focus_quiet_s,
+            self.idle_policy.probe_interval_s,
+            self.idle_policy.probe_duration_s,
+            self.idle_policy.misses_before_sweep,
+            self.idle_policy.sweep_cooldown_s,
+            self.idle_policy.post_focus_quiet_s,
         )
 
-        # Light-context policy orchestration (optional, suggest-only):
-        self._light_context_auto_enabled = env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True)
-        self._light_analytics_enabled = env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True)
-        self._light_user_id = (os.getenv("HEALTHY_LIGHT_CONTEXT_USER_ID", "default") or "default").strip() or "default"
-        self._light_prefers_dim = env_flag("HEALTHY_LIGHT_PREFERS_DIM", False)
-        self._light_sensitive = env_flag("HEALTHY_LIGHT_SENSITIVE", False)
-        self._light_allow_wellness_nudges = env_flag("HEALTHY_LIGHT_ALLOW_WELLNESS_NUDGES", True)
-        self._light_day_start_hour = env_int("HEALTHY_LIGHT_DAY_START_HOUR", 7, min_value=0, max_value=23)
-        self._light_night_start_hour = env_int("HEALTHY_LIGHT_NIGHT_START_HOUR", 20, min_value=0, max_value=23)
-        self._light_low_lux_threshold = env_float("HEALTHY_LIGHT_LOW_LUX_THRESHOLD", 40.0, min_value=0.0)
-        self._light_baseline_alpha = env_float("HEALTHY_LIGHT_BASELINE_ALPHA", 0.15, min_value=0.01, max_value=1.0)
-        self._light_baseline_min_samples = env_int("HEALTHY_LIGHT_BASELINE_MIN_SAMPLES", 5, min_value=1)
-        self._light_baseline_path = self._resolve_runtime_data_path("light_context_baseline.json")
-        self._light_analytics_path = self._resolve_runtime_data_path("light_context_analytics.jsonl")
-        self._light_baseline_state = self._load_light_baseline_state()
-        self._light_last_lux: float | None = None
-        self._light_last_lux_time: float | None = None
-        self._light_low_since_time: float | None = None
+        # Light-context policy orchestration (delegates to LightOrchestrator)
+        from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
+
+        _light_user_id = (os.getenv("HEALTHY_LIGHT_CONTEXT_USER_ID", "default") or "default").strip() or "default"
+        self.light_orchestrator = LightOrchestrator(
+            enabled=env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True),
+            analytics_enabled=env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True),
+            user_id=_light_user_id,
+            prefers_dim=env_flag("HEALTHY_LIGHT_PREFERS_DIM", False),
+            light_sensitive=env_flag("HEALTHY_LIGHT_SENSITIVE", False),
+            allow_wellness_nudges=env_flag("HEALTHY_LIGHT_ALLOW_WELLNESS_NUDGES", True),
+            day_start_hour=env_int("HEALTHY_LIGHT_DAY_START_HOUR", 7, min_value=0, max_value=23),
+            night_start_hour=env_int("HEALTHY_LIGHT_NIGHT_START_HOUR", 20, min_value=0, max_value=23),
+            low_lux_threshold=env_float("HEALTHY_LIGHT_LOW_LUX_THRESHOLD", 40.0, min_value=0.0),
+            baseline_alpha=env_float("HEALTHY_LIGHT_BASELINE_ALPHA", 0.15, min_value=0.01, max_value=1.0),
+            baseline_min_samples=env_int("HEALTHY_LIGHT_BASELINE_MIN_SAMPLES", 5, min_value=1),
+            baseline_path=self._resolve_runtime_data_path("light_context_baseline.json"),
+            analytics_path=self._resolve_runtime_data_path("light_context_analytics.jsonl"),
+        )
         logger.info(
-            "Light-context policy: auto_enabled=%s, analytics=%s, user_id=%s, baseline=%s",
-            self._light_context_auto_enabled,
-            self._light_analytics_enabled,
-            self._light_user_id,
-            self._light_baseline_path,
+            "Light-context policy: enabled=%s, analytics=%s, user_id=%s, baseline=%s",
+            self.light_orchestrator.enabled,
+            self.light_orchestrator.analytics_enabled,
+            self.light_orchestrator.user_id,
+            self.light_orchestrator.baseline_path,
         )
 
     def copy(self) -> "OpenaiRealtimeHandler":
@@ -230,217 +215,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         """Return whether a given tool name is available in this session."""
         return any(spec.get("name") == name for spec in get_tool_specs())
 
-    def _idle_mmwave_sweep_allowed(self, now: float) -> bool:
-        """Decide whether the next idle mmWave call may include a sweep."""
-        if self._idle_mmwave_consecutive_misses < self._idle_mmwave_misses_before_sweep:
-            return False
-        if self._idle_mmwave_last_sweep_time is None:
-            return True
-        return (now - self._idle_mmwave_last_sweep_time) >= self._idle_mmwave_sweep_cooldown_s
-
     def _resolve_runtime_data_path(self, filename: str) -> Path:
         """Resolve a writable path for runtime policy/analytics data."""
         base = Path(self.instance_path) if self.instance_path else Path.cwd()
         return base / filename
-
-    def _load_light_baseline_state(self) -> dict[str, Any]:
-        """Load baseline JSON state from disk with safe fallback."""
-        default: dict[str, Any] = {"schema_version": 1, "users": {}}
-        path = self._light_baseline_path
-        try:
-            if not path.exists():
-                return default
-            parsed = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(parsed, dict):
-                return default
-            users = parsed.get("users")
-            if not isinstance(users, dict):
-                parsed["users"] = {}
-            return parsed
-        except Exception as e:
-            logger.warning("Failed loading light baseline state from %s: %s", path, e)
-            return default
-
-    def _save_light_baseline_state(self) -> None:
-        """Persist baseline JSON state to disk."""
-        path = self._light_baseline_path
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._light_baseline_state, ensure_ascii=True, indent=2), encoding="utf-8")
-        except Exception as e:
-            logger.warning("Failed writing light baseline state to %s: %s", path, e)
-
-    def _is_daytime_hour(self, hour: int) -> bool:
-        """Return True for daytime hours using configured day/night cutoffs."""
-        if self._light_day_start_hour == self._light_night_start_hour:
-            return True
-        if self._light_day_start_hour < self._light_night_start_hour:
-            return self._light_day_start_hour <= hour < self._light_night_start_hour
-        # Wrap-around configuration (rare): daytime spans midnight.
-        return hour >= self._light_day_start_hour or hour < self._light_night_start_hour
-
-    def _compute_lux_delta_60s(self, lux: float, now: float) -> float | None:
-        """Estimate lux delta normalized to a 60s window."""
-        if self._light_last_lux is None or self._light_last_lux_time is None:
-            return None
-        dt = now - self._light_last_lux_time
-        if dt < 1.0 or dt > 600.0:
-            return None
-        raw_delta = lux - self._light_last_lux
-        scaled_delta = raw_delta * (60.0 / max(1.0, dt))
-        return float(scaled_delta)
-
-    def _get_or_create_user_baseline_entry(self) -> dict[str, Any]:
-        """Get mutable baseline entry for the configured user id."""
-        users = self._light_baseline_state.setdefault("users", {})
-        if not isinstance(users, dict):
-            users = {}
-            self._light_baseline_state["users"] = users
-        user_entry = users.get(self._light_user_id)
-        if not isinstance(user_entry, dict):
-            user_entry = {"hours": {}, "updated_at": None}
-            users[self._light_user_id] = user_entry
-        hours = user_entry.get("hours")
-        if not isinstance(hours, dict):
-            user_entry["hours"] = {}
-        return user_entry
-
-    def _update_user_lux_baseline(self, lux: float, local_hour: int) -> None:
-        """Update per-user rolling lux baseline for daytime behavior."""
-        if not self._is_daytime_hour(local_hour):
-            return
-        user_entry = self._get_or_create_user_baseline_entry()
-        hours: dict[str, Any] = user_entry["hours"]
-        bucket_key = str(local_hour)
-        bucket = hours.get(bucket_key)
-        if not isinstance(bucket, dict):
-            bucket = {"ema_lux": None, "samples": 0}
-            hours[bucket_key] = bucket
-
-        prev_ema = bucket.get("ema_lux")
-        prev_ema_value = float(prev_ema) if isinstance(prev_ema, (int, float)) else None
-        next_ema = lux if prev_ema_value is None else (self._light_baseline_alpha * lux) + (
-            (1.0 - self._light_baseline_alpha) * prev_ema_value
-        )
-        samples = int(bucket.get("samples", 0)) + 1
-        bucket["ema_lux"] = round(float(next_ema), 3)
-        bucket["samples"] = samples
-        user_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._save_light_baseline_state()
-
-    def _get_user_typical_day_low_lux(self, local_hour: int) -> float | None:
-        """Return a user baseline lux value for personalization."""
-        user_entry = self._get_or_create_user_baseline_entry()
-        hours = user_entry.get("hours")
-        if not isinstance(hours, dict):
-            return None
-
-        bucket = hours.get(str(local_hour))
-        if isinstance(bucket, dict):
-            samples = int(bucket.get("samples", 0))
-            ema = bucket.get("ema_lux")
-            if samples >= self._light_baseline_min_samples and isinstance(ema, (int, float)):
-                return float(ema)
-
-        fallback_values: list[float] = []
-        for hour_str, raw_bucket in hours.items():
-            if not isinstance(raw_bucket, dict):
-                continue
-            try:
-                hour = int(hour_str)
-            except Exception:
-                continue
-            if not self._is_daytime_hour(hour):
-                continue
-            ema = raw_bucket.get("ema_lux")
-            samples = int(raw_bucket.get("samples", 0))
-            if samples > 0 and isinstance(ema, (int, float)):
-                fallback_values.append(float(ema))
-        if not fallback_values:
-            return None
-        return float(sum(fallback_values) / len(fallback_values))
-
-    def _append_light_analytics_event(
-        self,
-        *,
-        source_tool: str,
-        lux: float | None,
-        result: dict[str, Any],
-    ) -> None:
-        """Append one light-context analytics row as JSONL."""
-        if not self._light_analytics_enabled:
-            return
-        payload = {
-            "event": "light_context_decision",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user_id": self._light_user_id,
-            "source_tool": source_tool,
-            "context_state": result.get("context_state"),
-            "recommended_mode": result.get("recommended_mode"),
-            "recommended_actions": result.get("recommended_actions"),
-            "confidence": result.get("confidence"),
-            "cooldown_hint_s": result.get("cooldown_hint_s"),
-            "reason_codes": result.get("reason_codes"),
-            "lux": lux,
-            "observations": result.get("observations"),
-        }
-        path = self._light_analytics_path
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-        except Exception as e:
-            logger.warning("Failed writing light analytics event to %s: %s", path, e)
-
-    async def _run_light_context_from_mmwave(self, mmwave_result: dict[str, Any]) -> dict[str, Any] | None:
-        """Auto-run light_context after mmWave when lux data is available."""
-        if not self._light_context_auto_enabled:
-            return None
-        if not self._has_tool("light_context"):
-            return None
-
-        lux = extract_lux_from_mmwave_result(mmwave_result)
-        if lux is None:
-            return None
-
-        now = asyncio.get_event_loop().time()
-        local_hour = datetime.now().hour
-        lux_delta_60s = self._compute_lux_delta_60s(lux, now)
-
-        if lux <= self._light_low_lux_threshold:
-            if self._light_low_since_time is None:
-                self._light_low_since_time = now
-        else:
-            self._light_low_since_time = None
-
-        low_light_duration_min = (
-            ((now - self._light_low_since_time) / 60.0) if self._light_low_since_time is not None else 0.0
-        )
-        user_typical_day_low_lux = self._get_user_typical_day_low_lux(local_hour)
-
-        args = {
-            "lux": lux,
-            "previous_lux": self._light_last_lux,
-            "lux_delta_60s": lux_delta_60s,
-            "presence_detected": _mmwave_has_target(mmwave_result),
-            "active_interaction": (not self.is_idle_tool_call),
-            "low_light_duration_min": low_light_duration_min,
-            "local_hour": local_hour,
-            "prefers_dim": self._light_prefers_dim,
-            "light_sensitive": self._light_sensitive,
-            "allow_wellness_nudges": self._light_allow_wellness_nudges,
-            "user_typical_day_low_lux": user_typical_day_low_lux,
-            "mmwave_result": mmwave_result,
-        }
-        light_context_result = await dispatch_tool_call("light_context", json.dumps(args), self.deps)
-        if isinstance(light_context_result, dict):
-            self._append_light_analytics_event(source_tool="mmWave", lux=lux, result=light_context_result)
-
-        # Baseline update comes after decision so current reading does not bias its own classification.
-        self._update_user_lux_baseline(lux=lux, local_hour=local_hour)
-        self._light_last_lux = lux
-        self._light_last_lux_time = now
-        return light_context_result if isinstance(light_context_result, dict) else None
 
     async def apply_personality(self, profile: str | None) -> str:
         """Apply a new personality (profile) at runtime if possible.
@@ -559,7 +337,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 try:
                     self._connected_event.clear()
                 except Exception:
-                    pass
+                    logger.debug("Failed to clear connected event in start_up", exc_info=True)
 
     async def _restart_session(self) -> None:
         """Force-close the current session and start a fresh one in background.
@@ -571,7 +349,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 try:
                     await self.connection.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close connection during restart", exc_info=True)
                 finally:
                     self.connection = None
 
@@ -584,7 +362,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             try:
                 self._connected_event.clear()
             except Exception:
-                pass
+                logger.debug("Failed to clear connected event during restart", exc_info=True)
             asyncio.create_task(self._run_realtime_session(), name="openai-realtime-restart")
             try:
                 await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
@@ -645,7 +423,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             try:
                 self._connected_event.set()
             except Exception:
-                pass
+                logger.debug("Failed to set connected event after session init", exc_info=True)
             async for event in self.connection:
                 logger.debug(f"OpenAI event: {event.type}")
                 if event.type == "input_audio_buffer.speech_started":
@@ -770,17 +548,17 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         if self.is_idle_tool_call and tool_name == "mmWave":
                             now = asyncio.get_event_loop().time()
                             idle_args = _safe_parse_args(args_json_str)
-                            idle_mmwave_sweep_used = self._idle_mmwave_sweep_allowed(now)
+                            idle_mmwave_sweep_used = self.idle_policy.sweep_allowed(now)
                             idle_args["mode"] = "locate_and_measure"
-                            idle_args["duration_s"] = self._idle_mmwave_probe_duration_s
+                            idle_args["duration_s"] = self.idle_policy.probe_duration_s
                             idle_args["sweep_if_unseen"] = idle_mmwave_sweep_used
                             effective_args_json = json.dumps(idle_args)
                             if idle_mmwave_sweep_used:
-                                self._idle_mmwave_last_sweep_time = now
+                                self.idle_policy.record_sweep_used(now)
                             logger.info(
                                 "Idle mmWave policy: misses=%d/%d, sweep_if_unseen=%s, args=%s",
-                                self._idle_mmwave_consecutive_misses,
-                                self._idle_mmwave_misses_before_sweep,
+                                self.idle_policy.consecutive_misses,
+                                self.idle_policy.misses_before_sweep,
                                 idle_mmwave_sweep_used,
                                 _short_text(effective_args_json),
                             )
@@ -798,29 +576,24 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         if isinstance(tool_result, dict) and tool_result.get("error"):
                             logger.warning("Idle mmWave failed: %s", _short_text(tool_result.get("error")))
                         elif _mmwave_has_target(tool_result):
-                            self._idle_mmwave_consecutive_misses = 0
-                            self._idle_mmwave_last_focus_time = now
-                            logger.info("Idle mmWave detected a target; miss counter reset.")
+                            self.idle_policy.record_target_found(now)
                         elif _mmwave_is_no_target(tool_result):
-                            if idle_mmwave_sweep_used:
-                                self._idle_mmwave_consecutive_misses = 0
-                                logger.info("Idle mmWave sweep found no target; miss counter reset.")
-                            else:
-                                self._idle_mmwave_consecutive_misses += 1
-                                logger.info(
-                                    "Idle mmWave no target (miss %d/%d before sweep).",
-                                    self._idle_mmwave_consecutive_misses,
-                                    self._idle_mmwave_misses_before_sweep,
-                                )
+                            self.idle_policy.record_no_target(sweep_was_used=idle_mmwave_sweep_used)
                         else:
-                            logger.info(
-                                "Idle mmWave inconclusive; miss counter unchanged at %d.",
-                                self._idle_mmwave_consecutive_misses,
-                            )
+                            self.idle_policy.record_inconclusive()
 
                     if tool_name == "mmWave" and isinstance(tool_result, dict):
                         try:
-                            auto_light_context = await self._run_light_context_from_mmwave(tool_result)
+
+                            async def _dispatch_light(name: str, args_json: str) -> dict[str, Any]:
+                                return await dispatch_tool_call(name, args_json, self.deps)
+
+                            auto_light_context = await self.light_orchestrator.run_from_mmwave(
+                                tool_result,
+                                is_idle=self.is_idle_tool_call,
+                                has_tool=self._has_tool("light_context"),
+                                dispatch_fn=_dispatch_light,
+                            )
                             if auto_light_context is not None:
                                 tool_result["light_context"] = auto_light_context
                                 logger.info(
@@ -967,16 +740,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Handle idle
         now = asyncio.get_event_loop().time()
         has_mmwave = self._has_tool("mmWave")
-        idle_interval = self._idle_mmwave_probe_interval_s if has_mmwave else self._idle_default_interval_s
+        idle_interval = self.idle_policy.probe_interval_s if has_mmwave else self.idle_policy.interval_s
         idle_duration = now - self.last_activity_time
-        if idle_duration > idle_interval and self.deps.movement_manager.is_idle():
-            if has_mmwave and self._idle_mmwave_last_focus_time is not None:
-                since_focus = now - self._idle_mmwave_last_focus_time
-                if since_focus < self._idle_mmwave_post_focus_quiet_s:
-                    remaining = self._idle_mmwave_post_focus_quiet_s - since_focus
-                    logger.debug("Idle mmWave quiet window active (%.1fs remaining); staying still.", remaining)
-                    self.last_activity_time = now
-                    return None
+        is_moving = not self.deps.movement_manager.is_idle()
+        if idle_duration > idle_interval and not is_moving:
+            if has_mmwave and not self.idle_policy.should_trigger(idle_duration, is_moving=False, now=now):
+                self.last_activity_time = now
+                return None
             try:
                 await self.send_idle_signal(idle_duration)
             except Exception as e:
@@ -1051,11 +821,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         raw = fn()
                         break
                     except Exception:
-                        pass
+                        logger.debug("Model serialization via %s failed", attr, exc_info=True)
             if raw is None:
                 try:
                     raw = dict(model)
                 except Exception:
+                    logger.debug("dict() conversion of model object failed", exc_info=True)
                     raw = None
             # Scan for voice candidates
             candidates: set[str] = set()
@@ -1077,7 +848,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         for it in obj:
                             _collect(it)
                 except Exception:
-                    pass
+                    logger.debug("Voice candidate collection failed for object", exc_info=True)
 
             if isinstance(raw, dict):
                 _collect(raw)
@@ -1087,6 +858,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 voices = ["cedar", *[v for v in voices if v != "cedar"]]
             return voices
         except Exception:
+            logger.debug("Voice discovery failed; returning fallback list", exc_info=True)
             return fallback
 
     async def send_idle_signal(self, idle_duration: float) -> None:
@@ -1096,28 +868,24 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         has_mmwave = self._has_tool("mmWave")
         if has_mmwave:
             now = asyncio.get_event_loop().time()
-            sweep_allowed = self._idle_mmwave_sweep_allowed(now)
-            if sweep_allowed:
-                strategy = "run one slow scan sweep if no target is found"
-                sweep_flag = "true"
-            else:
-                strategy = "do a passive check only and stay still if no target is found"
-                sweep_flag = "false"
+            sweep_allowed = self.idle_policy.sweep_allowed(now)
+            strategy = self.idle_policy.build_strategy_message(sweep_allowed)
+            sweep_flag = "true" if sweep_allowed else "false"
             timestamp_msg = (
                 f"[Idle time update: {self.format_timestamp()} - No activity for {idle_duration:.1f}s] "
                 "Do one calm wellness scan cycle."
             )
             idle_instructions = (
                 "You MUST respond with function calls only - no speech or text. "
-                f"Call mmWave exactly once with mode='locate_and_measure', duration_s={self._idle_mmwave_probe_duration_s}, "
+                f"Call mmWave exactly once with mode='locate_and_measure', duration_s={self.idle_policy.probe_duration_s}, "
                 f"sweep_if_unseen={sweep_flag}. Then stop. "
                 f"Current strategy: {strategy}. "
                 "Do not call dance, play_emotion, or sweep_look for this idle cycle."
             )
             logger.info(
                 "Idle schedule: mmWave probe (misses=%d/%d, sweep_allowed=%s)",
-                self._idle_mmwave_consecutive_misses,
-                self._idle_mmwave_misses_before_sweep,
+                self.idle_policy.consecutive_misses,
+                self.idle_policy.misses_before_sweep,
                 sweep_allowed,
             )
         else:
@@ -1177,8 +945,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 import os
 
                 os.environ["OPENAI_API_KEY"] = key
-            except Exception:  # best-effort
-                pass
+            except Exception:
+                logger.debug("Best-effort os.environ OPENAI_API_KEY assignment failed", exc_info=True)
 
             target_dir = Path(self.instance_path)
             env_path = target_dir / ".env"

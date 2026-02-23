@@ -5,12 +5,16 @@ conversation "personalities" (profiles) so that `main.py` stays lean.
 """
 
 from __future__ import annotations
+import logging
 from typing import Any
 from pathlib import Path
 
 import gradio as gr
 
 from .config import LOCKED_PROFILE, config
+
+
+logger = logging.getLogger(__name__)
 
 
 class PersonalityUI:
@@ -53,7 +57,7 @@ class PersonalityUI:
                         if p.is_dir() and (p / "instructions.txt").exists():
                             names.append(f"user_personalities/{p.name}")
         except Exception:
-            pass
+            logger.warning("Failed to list personality profiles", exc_info=True)
         return names
 
     def _resolve_profile_dir(self, selection: str) -> Path:
@@ -153,7 +157,7 @@ class PersonalityUI:
                     v = vf.read_text(encoding="utf-8").strip()
                     return v or "cedar"
             except Exception:
-                pass
+                logger.debug("Failed to read voice for %r", name, exc_info=True)
             return "cedar"
 
         async def _fetch_voices(selected: str) -> dict[str, Any]:
@@ -164,6 +168,7 @@ class PersonalityUI:
                     current = "cedar"
                 return gr.update(choices=voices, value=current)
             except Exception:
+                logger.debug("Failed to fetch voices", exc_info=True)
                 return gr.update(choices=["cedar"], value="cedar")
 
         def _available_tools_for(selected: str) -> tuple[list[str], list[str]]:
@@ -174,14 +179,14 @@ class PersonalityUI:
                         continue
                     shared.append(py.stem)
             except Exception:
-                pass
+                logger.warning("Failed to list shared tools", exc_info=True)
             local: list[str] = []
             try:
                 if selected != self.DEFAULT_OPTION:
                     for py in (self._profiles_root / selected).glob("*.py"):
                         local.append(py.stem)
             except Exception:
-                pass
+                logger.warning("Failed to list local tools for %r", selected, exc_info=True)
             return sorted(shared), sorted(local)
 
         def _parse_enabled_tools(text: str) -> list[str]:
@@ -227,6 +232,7 @@ class PersonalityUI:
                     gr.update(value="cedar"),
                 )
             except Exception:
+                logger.warning("Failed to initialize new personality form", exc_info=True)
                 return (
                     gr.update(),
                     gr.update(),

@@ -26,6 +26,9 @@ from .headless_personality import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def mount_personality_routes(
     app: FastAPI,
     handler: OpenaiRealtimeHandler,
@@ -63,7 +66,7 @@ def mount_personality_routes(
             if env_val:
                 return env_val
         except Exception:
-            pass
+            logger.debug("Failed to read startup personality choice", exc_info=True)
         return DEFAULT_OPTION
 
     def _current_choice() -> str:
@@ -71,6 +74,7 @@ def mount_personality_routes(
             cur = getattr(config, "REACHY_MINI_CUSTOM_PROFILE", None)
             return cur or DEFAULT_OPTION
         except Exception:
+            logger.debug("Failed to read current personality choice", exc_info=True)
             return DEFAULT_OPTION
 
     @app.get("/personalities")
@@ -114,6 +118,7 @@ def mount_personality_routes(
         try:
             raw = await request.json()
         except Exception:
+            logger.warning("Failed to parse JSON body in /personalities/save", exc_info=True)
             raw = {}
         name = str(raw.get("name", ""))
         instructions = str(raw.get("instructions", ""))
@@ -155,7 +160,7 @@ def mount_personality_routes(
                 if k in form and form[k] is not None:
                     data[k] = str(form[k])
         except Exception:
-            pass
+            logger.debug("Failed to parse form data in /personalities/save_raw", exc_info=True)
         # Try JSON
         try:
             raw = await request.json()
@@ -164,7 +169,7 @@ def mount_personality_routes(
                     if raw.get(k) is not None:
                         data[k] = str(raw.get(k))
         except Exception:
-            pass
+            logger.debug("Failed to parse JSON body in /personalities/save_raw", exc_info=True)
 
         name_s = _sanitize_name(str(data.get("name") or ""))
         if not name_s:
@@ -203,8 +208,6 @@ def mount_personality_routes(
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
 
-    logger = logging.getLogger(__name__)
-
     @app.post("/personalities/apply")
     async def _apply(
         payload: ApplyPayload | None = None,
@@ -237,6 +240,7 @@ def mount_personality_routes(
                 if isinstance(body, dict) and "persist" in body:
                     persist_flag = bool(body.get("persist"))
             except Exception:
+                logger.debug("Failed to parse JSON body in /personalities/apply", exc_info=True)
                 sel_name = None
         if request is not None:
             try:
@@ -244,7 +248,7 @@ def mount_personality_routes(
                 if q_persist is not None:
                     persist_flag = str(q_persist).lower() in {"1", "true", "yes", "on"}
             except Exception:
-                pass
+                logger.debug("Failed to read persist query param", exc_info=True)
         if not sel_name:
             sel_name = DEFAULT_OPTION
 
@@ -278,10 +282,12 @@ def mount_personality_routes(
             try:
                 return await handler.get_available_voices()
             except Exception:
+                logger.debug("Voice discovery failed", exc_info=True)
                 return ["cedar"]
 
         try:
             fut = asyncio.run_coroutine_threadsafe(_get_v(), loop)
             return fut.result(timeout=10)
         except Exception:
+            logger.debug("Voice endpoint failed", exc_info=True)
             return ["cedar"]
