@@ -176,6 +176,41 @@ class LightContext(Tool):
                     intentional_dim = True
                     reason_codes.append("user_baseline_low_lux")
 
+            # -----------------------------------------------------------------
+            # Classification decision tree (order matters!)
+            #
+            # The if/elif chain below is evaluated top-to-bottom.  The FIRST
+            # matching branch wins.  Precedence rationale:
+            #
+            #   1. unexpected_darkening   — sharp lux drop + active + presence
+            #      Checked first because a sudden blackout overrides everything,
+            #      including nighttime (a power cut at 23:00 is not "wind-down").
+            #
+            #   2. night_wind_down        — nighttime + low lux + presence
+            #      After ruling out a sharp drop, low lux at night is the most
+            #      common quiet scenario.
+            #
+            #   3. intentional_dim_work   — daytime + low lux + user preference
+            #      User explicitly prefers dim or is light-sensitive.  Checked
+            #      before strain risk so we never nudge users who chose low light.
+            #
+            #   4. prolonged_low_light_strain_risk — daytime + low lux + duration
+            #      Only fires when no preference flag explains the low light AND
+            #      the user has stayed in it long enough.  Gated by
+            #      allow_wellness_nudges.
+            #
+            #   5. bright_active          — daytime + bright lux + presence
+            #      High-energy daytime environment.
+            #
+            #   6. neutral (else)         — everything that didn't match above
+            #
+            # Overlap notes:
+            #   • sharp_drop can co-occur with is_night; precedence ensures
+            #     unexpected_darkening wins.
+            #   • intentional_dim and prolonged_strain share is_low_lux during
+            #     daytime; preference flags disambiguate.
+            #   • bright_active and neutral are mutually exclusive by threshold.
+            # -----------------------------------------------------------------
             if sharp_drop and active_interaction and presence_ok:
                 context_state = "unexpected_darkening"
                 recommended_mode = "quiet"
