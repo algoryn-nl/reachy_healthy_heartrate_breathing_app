@@ -559,7 +559,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 try:
                     self._connected_event.clear()
                 except Exception:
-                    pass
+                    logger.debug("Failed to clear connected event in start_up", exc_info=True)
 
     async def _restart_session(self) -> None:
         """Force-close the current session and start a fresh one in background.
@@ -571,7 +571,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 try:
                     await self.connection.close()
                 except Exception:
-                    pass
+                    logger.debug("Failed to close connection during restart", exc_info=True)
                 finally:
                     self.connection = None
 
@@ -584,7 +584,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             try:
                 self._connected_event.clear()
             except Exception:
-                pass
+                logger.debug("Failed to clear connected event during restart", exc_info=True)
             asyncio.create_task(self._run_realtime_session(), name="openai-realtime-restart")
             try:
                 await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
@@ -645,7 +645,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             try:
                 self._connected_event.set()
             except Exception:
-                pass
+                logger.debug("Failed to set connected event after session init", exc_info=True)
             async for event in self.connection:
                 logger.debug(f"OpenAI event: {event.type}")
                 if event.type == "input_audio_buffer.speech_started":
@@ -1051,11 +1051,12 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         raw = fn()
                         break
                     except Exception:
-                        pass
+                        logger.debug("Model serialization via %s failed", attr, exc_info=True)
             if raw is None:
                 try:
                     raw = dict(model)
                 except Exception:
+                    logger.debug("dict() conversion of model object failed", exc_info=True)
                     raw = None
             # Scan for voice candidates
             candidates: set[str] = set()
@@ -1077,7 +1078,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         for it in obj:
                             _collect(it)
                 except Exception:
-                    pass
+                    logger.debug("Voice candidate collection failed for object", exc_info=True)
 
             if isinstance(raw, dict):
                 _collect(raw)
@@ -1087,6 +1088,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 voices = ["cedar", *[v for v in voices if v != "cedar"]]
             return voices
         except Exception:
+            logger.debug("Voice discovery failed; returning fallback list", exc_info=True)
             return fallback
 
     async def send_idle_signal(self, idle_duration: float) -> None:
@@ -1177,8 +1179,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 import os
 
                 os.environ["OPENAI_API_KEY"] = key
-            except Exception:  # best-effort
-                pass
+            except Exception:
+                logger.debug("Best-effort os.environ OPENAI_API_KEY assignment failed", exc_info=True)
 
             target_dir = Path(self.instance_path)
             env_path = target_dir / ".env"
