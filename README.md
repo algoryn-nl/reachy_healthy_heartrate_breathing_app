@@ -127,7 +127,12 @@ Custom tools can be added by creating a `.py` file in the profile folder that de
 src/healthy_heartrate_breathing/
   config.py                 -- app configuration (env vars, profile selection)
   env_utils.py              -- shared coercion & env-var helpers
-  openai_realtime.py        -- OpenAI Realtime API handler with idle scanning
+  openai_realtime.py        -- WebSocket lifecycle, reconnection, session orchestration
+  audio_router.py           -- mic/speaker frame routing (resample, emit audio deltas)
+  idle_policy.py            -- idle detection state machine, mmWave probe scheduling
+  tool_dispatcher.py        -- dispatches LLM tool calls to the tool registry
+  transcript_handler.py     -- conversation transcript capture and formatting
+  light_orchestrator.py     -- auto-invokes light context after mmWave lux data
   tools/
     core_tools.py           -- Tool base class, registry, dispatcher
   profiles/

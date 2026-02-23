@@ -11,7 +11,6 @@
 - [ ] Add `asyncio.wait_for()` timeout to tool dispatch (openai_realtime.py:567)
 - [ ] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch)
 - [ ] Fix race condition in antenna blending (moves.py:599-633)
-- [ ] Surface protocol version mismatch as ERROR, not DEBUG (mmWave.py:162-164)
 - [ ] Fix session setup exception handling gap (openai_realtime.py:415-417)
 
 ### Upcoming — Medium Priority
@@ -39,6 +38,7 @@
 - [x] Improve serial port auto-detection with VID/PID + HELLO probe (2026-02-23)
 - [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
 - [x] Advertise light sensor status in HELLO feature bits (2026-02-23)
+- [x] Surface protocol version mismatch at WARNING level (2026-02-23)
 - [x] Decompose `_run_realtime_session()` into TranscriptHandler, ToolDispatcher, AudioRouter (2026-02-23)
 - [x] Extract IdlePolicy from openai_realtime handler (2026-02-23)
 - [x] Extract LightOrchestrator from openai_realtime handler (2026-02-23)
