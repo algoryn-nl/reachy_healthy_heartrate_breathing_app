@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 import abc
+import os
 import sys
 import json
 import inspect
@@ -33,6 +34,14 @@ if not logger.handlers:
 ALL_TOOLS: Dict[str, "Tool"] = {}
 ALL_TOOL_SPECS: List[Dict[str, Any]] = []
 _TOOLS_INITIALIZED = False
+
+
+def _get_env_disabled_tools() -> set[str]:
+    """Return tool names disabled via HEALTHY_DISABLED_TOOLS."""
+    raw = os.getenv("HEALTHY_DISABLED_TOOLS", "")
+    if not raw:
+        return set()
+    return {name.strip() for name in raw.split(",") if name.strip()}
 
 
 
@@ -277,9 +286,11 @@ def _initialize_tools() -> None:
 _initialize_tools()
 
 
-def get_tool_specs(exclusion_list: list[str] = []) -> list[Dict[str, Any]]:
+def get_tool_specs(exclusion_list: list[str] | None = None) -> list[Dict[str, Any]]:
     """Get tool specs, optionally excluding some tools."""
-    return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in exclusion_list]
+    excluded = set(exclusion_list or [])
+    excluded.update(_get_env_disabled_tools())
+    return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in excluded]
 
 
 # Dispatcher
@@ -294,6 +305,13 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
 
 async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
+    if tool_name in _get_env_disabled_tools():
+        return {
+            "status": "disabled",
+            "tool": tool_name,
+            "reason": "tool disabled via HEALTHY_DISABLED_TOOLS",
+        }
+
     tool = ALL_TOOLS.get(tool_name)
 
     if not tool:

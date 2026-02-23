@@ -59,3 +59,7 @@ cache/
 
 # User-created personalities (managed by UI)
 src/healthy_heartrate_breathing/profiles/user_personalities/
+
+.claude/
+CLAUDE.md
+docs/plans/
