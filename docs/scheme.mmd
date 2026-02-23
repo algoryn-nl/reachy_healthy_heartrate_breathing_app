@@ -15,8 +15,8 @@ flowchart TB
     OpenAI -- audio stream --> 
     Motion@{ label: "<span style='font-size:16px;font-weight:bold;'>Motion Control</span><br><span style='font-size:13px;color:#f57f17;'>Audio Sync + Tracking</span>" }
     
-    OpenAI -- tool calls --> 
-    Handlers@{ label: "<span style='font-size:16px;font-weight:bold;'>Tool Handlers</span><br><span style='font-size:12px;color:#f9a825;'>move_head, camera, head_tracking,<br/>dance, play_emotion, do_nothing</span>" }
+    OpenAI -- tool calls -->
+    Handlers@{ label: "<span style='font-size:16px;font-weight:bold;'>Tool Handlers</span><br><span style='font-size:12px;color:#f9a825;'>move_head, camera, head_tracking,<br/>dance, play_emotion, mmWave,<br/>light_context, do_nothing</span>" }
 
     Handlers -- movement 
     requests --> Motion
@@ -40,6 +40,13 @@ flowchart TB
 
     Motion -- commands --> Robot
 
+    Handlers -- USB serial
+    (VID/PID detection) -->
+    mmWaveSensor@{ label: "<span style='font-size:16px;font-weight:bold;'>mmWave Sensor</span><br><span style='font-size:13px;color:#c62828;'>MR60BHA2 + BH1750 Light</span>" }
+
+    mmWaveSensor -- telemetry
+    (targets, vitals, lux) --> Handlers
+
     Handlers -- results --> OpenAI
 
      User:::userStyle
@@ -50,6 +57,7 @@ flowchart TB
      Camera:::coreStyle
      Vision:::aiStyle
      Robot:::hardwareStyle
+     mmWaveSensor:::hardwareStyle
     classDef userStyle fill:#e1f5fe,stroke:#01579b,stroke-width:3px
     classDef uiStyle fill:#b3e5fc,stroke:#0277bd,stroke-width:2px
     classDef aiStyle fill:#e1bee7,stroke:#7b1fa2,stroke-width:3px
