@@ -36,14 +36,10 @@
 - [ ] Document IdlePolicy state transitions with state diagram
 - [ ] Surface unused BIO state field and targets truncation flag (mmWave.py)
 
-### Upcoming — Firmware
-
-- [ ] Add buffer length validation in `handleDecodedPacket()` (reachy-sensor.ino:590)
-- [ ] Add `isfinite()` checks before coordinate encoding (reachy-sensor.ino:450-456)
-- [ ] Signal light sensor init failures to host (reachy-sensor.ino:668)
-
 ### Done
 
+- [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
+- [x] Advertise light sensor status in HELLO feature bits (2026-02-23)
 - [x] Extract IdlePolicy from openai_realtime handler (2026-02-23)
 - [x] Extract LightOrchestrator from openai_realtime handler (2026-02-23)
 - [x] Add logging to silent exception handlers (2026-02-23)
@@ -54,6 +50,7 @@
 
 ### Development Decisions
 
+- handleDecodedPacket() buffer validation already sufficient: exact length check + per-command payload validation (2026-02-23)
 - Locked profile pattern: app always uses `_healthy_heartrate_breathing_locked_profile` (2026-02-23)
 - IdlePolicy + LightOrchestrator extracted as first phase of handler decomposition (2026-02-23)
 - COBS + CRC-16 binary protocol chosen for mmWave: compact, checksummed, no framing ambiguity
