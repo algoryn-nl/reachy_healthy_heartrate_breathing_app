@@ -42,7 +42,10 @@ The tool picks the closest valid target during scan and automatically focuses th
 **Serial port resolution** (in order):
 1. Explicit `serial_port` parameter
 2. `MMWAVE_SERIAL_PORT` environment variable
-3. Auto-detect from `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*`
+3. Auto-detect using three-tier strategy:
+   - **VID/PID match**: Filter by USB device signature (VID `0x303A`, PID `0x1001` for Seeed XIAO ESP32)
+   - **Glob fallback**: Scan `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*` if VID/PID unavailable
+   - **HELLO probe**: When multiple candidates exist, probe each with `CMD_PING` or DTR reset → `EVT_HELLO` handshake to confirm firmware
 
 ### Ambient Light Context (`light_context` tool)
 
