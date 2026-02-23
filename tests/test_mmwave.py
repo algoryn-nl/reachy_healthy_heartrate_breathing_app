@@ -15,6 +15,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
     EVT_BIO,
     EVT_PONG,
+    EVT_HELLO,
     EVT_LIGHT,
     EVT_STATE,
     CMD_SET_HM,
@@ -23,6 +24,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     CMD_SET_FOCUS,
     PROTO_VERSION,
     CMD_SET_BIO_MS,
+    FEAT_LIGHT_SENSOR,
     CMD_SET_TARGETS_MS,
     ProtocolError,
     cobs_encode,
@@ -734,3 +736,27 @@ async def test_full_call_returns_error_on_serial_disconnect(monkeypatch: pytest.
 
     assert "error" in response
     monkeypatch.setattr(FakeSerial, "write", original_write)
+
+
+# ---------------------------------------------------------------------------
+# HELLO feature bits tests
+# ---------------------------------------------------------------------------
+
+
+def _pack_hello(*, proto_version: int, feature_bits: int) -> bytes:
+    return struct.pack("<BH", proto_version, feature_bits)
+
+
+def test_hello_with_light_sensor_feature_bit() -> None:
+    payload = _pack_hello(proto_version=1, feature_bits=FEAT_LIGHT_SENSOR)
+    event = decode_event(EVT_HELLO, payload)
+    assert event["type"] == "hello"
+    assert event["proto_version"] == 1
+    assert event["feature_bits"] & FEAT_LIGHT_SENSOR
+
+
+def test_hello_without_light_sensor_feature_bit() -> None:
+    payload = _pack_hello(proto_version=1, feature_bits=0)
+    event = decode_event(EVT_HELLO, payload)
+    assert event["type"] == "hello"
+    assert not (event["feature_bits"] & FEAT_LIGHT_SENSOR)
