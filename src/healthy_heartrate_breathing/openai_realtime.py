@@ -394,7 +394,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     if self.deps.head_wobbler is not None
                     else None
                 ),
+                timeout_s=env_float("HEALTHY_TOOL_DISPATCH_TIMEOUT_S", 30.0, min_value=1.0),
             )
+            self._dispatcher = dispatcher
 
             audio = AudioRouter(
                 output_sample_rate=self.output_sample_rate,
@@ -459,13 +461,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                     if not isinstance(tool_name, str) or not isinstance(args_json_str, str):
                         logger.error("Invalid tool call: tool_name=%s, args=%s", tool_name, args_json_str)
                         continue
-                    consumed = await dispatcher.on_tool_call_done(
+                    dispatcher.dispatch(
                         tool_name=tool_name,
                         args_json=args_json_str,
                         call_id=call_id,
                         is_idle=self.is_idle_tool_call,
                     )
-                    if consumed:
+                    if self.is_idle_tool_call:
                         self.is_idle_tool_call = False
 
                 elif event.type == "error":
@@ -548,6 +550,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Cancel any pending transcript debounce
         if hasattr(self, "_transcript_handler"):
             await self._transcript_handler.cancel_pending()
+
+        # Cancel any in-flight tool dispatch
+        if hasattr(self, "_dispatcher"):
+            await self._dispatcher.cancel()
 
         if self.connection:
             try:

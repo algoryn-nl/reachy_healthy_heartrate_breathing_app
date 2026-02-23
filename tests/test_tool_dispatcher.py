@@ -2,9 +2,9 @@
 # ruff: noqa: D101, D102, D103
 
 from __future__ import annotations
-import asyncio
 import json
 import time
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
