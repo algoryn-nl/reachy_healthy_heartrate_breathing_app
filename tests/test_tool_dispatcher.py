@@ -2,7 +2,9 @@
 # ruff: noqa: D101, D102, D103
 
 from __future__ import annotations
+import asyncio
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -208,3 +210,89 @@ class TestHeadWobblerReset:
             is_idle=False,
         )
         reset.assert_called_once()
+
+
+class TestTimeout:
+    @pytest.mark.asyncio
+    async def test_tool_timeout_returns_error(self, tmp_path) -> None:
+        """A tool that exceeds timeout_s produces an error result."""
+
+        async def slow_tool(name: str, args: str) -> dict:
+            await asyncio.sleep(10)
+            return {"status": "ok"}
+
+        send_result = AsyncMock()
+        d = _dispatcher(tmp_path, dispatch_tool=slow_tool, send_tool_result=send_result, timeout_s=0.1)
+
+        d.dispatch(tool_name="mmWave", args_json="{}", call_id="call-t", is_idle=False)
+        await asyncio.sleep(0.3)
+
+        call_args = send_result.call_args
+        result = json.loads(call_args[0][1])
+        assert "error" in result
+        assert "timed out" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_cancel_stops_running_tool(self, tmp_path) -> None:
+        """cancel() terminates an in-flight tool task."""
+        started = asyncio.Event()
+
+        async def blocking_tool(name: str, args: str) -> dict:
+            started.set()
+            await asyncio.sleep(60)
+            return {"status": "ok"}
+
+        send_result = AsyncMock()
+        d = _dispatcher(tmp_path, dispatch_tool=blocking_tool, send_tool_result=send_result, timeout_s=60)
+
+        d.dispatch(tool_name="mmWave", args_json="{}", call_id="call-c", is_idle=False)
+        await started.wait()
+
+        await d.cancel()
+
+        assert d._active_task is None
+        send_result.assert_not_called()
+
+
+class TestSerialization:
+    @pytest.mark.asyncio
+    async def test_tools_run_one_at_a_time(self, tmp_path) -> None:
+        """Semaphore ensures only one tool runs at a time."""
+        concurrency = 0
+        max_concurrency = 0
+
+        async def tracking_tool(name: str, args: str) -> dict:
+            nonlocal concurrency, max_concurrency
+            concurrency += 1
+            max_concurrency = max(max_concurrency, concurrency)
+            await asyncio.sleep(0.05)
+            concurrency -= 1
+            return {"status": "ok"}
+
+        d = _dispatcher(tmp_path, dispatch_tool=tracking_tool, timeout_s=5)
+
+        d.dispatch(tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=False)
+        d.dispatch(tool_name="mmWave", args_json="{}", call_id="call-2", is_idle=False)
+        d.dispatch(tool_name="mmWave", args_json="{}", call_id="call-3", is_idle=False)
+        await asyncio.sleep(0.3)
+
+        assert max_concurrency == 1
+
+
+class TestNonBlocking:
+    @pytest.mark.asyncio
+    async def test_dispatch_returns_immediately(self, tmp_path) -> None:
+        """dispatch() must not block — returns before tool completes."""
+
+        async def slow_tool(name: str, args: str) -> dict:
+            await asyncio.sleep(5)
+            return {"status": "ok"}
+
+        d = _dispatcher(tmp_path, dispatch_tool=slow_tool, timeout_s=10)
+
+        t0 = time.monotonic()
+        d.dispatch(tool_name="mmWave", args_json="{}", call_id="call-nb", is_idle=False)
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 0.05, f"dispatch() blocked for {elapsed:.3f}s"
+        await d.cancel()
