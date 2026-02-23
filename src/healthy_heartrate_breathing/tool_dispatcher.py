@@ -1,0 +1,263 @@
+"""Tool dispatch pipeline: idle policy, dispatch, result handling."""
+
+from __future__ import annotations
+import json
+import asyncio
+import logging
+from typing import Any, Callable, Awaitable
+
+import numpy as np
+
+from healthy_heartrate_breathing.idle_policy import IdlePolicy
+from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
+
+
+logger = logging.getLogger(__name__)
+
+
+def _short_text(value: Any, limit: int = 220) -> str:
+    """Render value as a compact single-line string for logs."""
+    text = str(value).replace("\n", " ")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\u2026"
+
+
+def _safe_parse_args(args_json: str) -> dict[str, Any]:
+    """Parse tool args json and always return an object."""
+    try:
+        parsed = json.loads(args_json or "{}")
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _mmwave_has_target(result: Any) -> bool:
+    """Return True when mmWave output indicates a detected target/person."""
+    if not isinstance(result, dict):
+        return False
+
+    scan = result.get("scan")
+    if isinstance(scan, dict):
+        latest = scan.get("latest_target")
+        if isinstance(latest, dict):
+            return True
+        recent = scan.get("recent_targets")
+        if isinstance(recent, list) and len(recent) > 0:
+            return True
+
+    measure = result.get("measure")
+    if isinstance(measure, dict) and bool(measure.get("success")):
+        return True
+
+    return False
+
+
+def _mmwave_is_no_target(result: Any) -> bool:
+    """Best-effort classification of a clean no-target mmWave result."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("error"):
+        return False
+    if _mmwave_has_target(result):
+        return False
+
+    scan = result.get("scan")
+    if not isinstance(scan, dict):
+        return False
+
+    latest = scan.get("latest_target")
+    if latest is None:
+        return True
+
+    targets_seen = scan.get("targets_seen")
+    return isinstance(targets_seen, int) and targets_seen <= 0
+
+
+class ToolDispatcher:
+    """Dispatches tool calls, integrating idle policy and light orchestration.
+
+    Testable without OpenAI connections -- all I/O is via injected callbacks.
+    """
+
+    def __init__(  # noqa: D107
+        self,
+        *,
+        idle_policy: IdlePolicy,
+        light_orchestrator: LightOrchestrator,
+        has_tool: Callable[[str], bool],
+        dispatch_tool: Callable[[str, str], Awaitable[dict[str, Any]]],
+        send_tool_result: Callable[[str, str], Awaitable[None]],
+        create_response: Callable[[str], Awaitable[None]],
+        create_message: Callable[[dict[str, Any]], Awaitable[None]],
+        enqueue_output: Callable[[dict[str, Any]], Awaitable[None]],
+        get_camera_frame: Callable[[], np.ndarray | None],
+        head_wobbler_reset: Callable[[], None] | None,
+    ) -> None:
+        self._idle_policy = idle_policy
+        self._light_orchestrator = light_orchestrator
+        self._has_tool = has_tool
+        self._dispatch_tool = dispatch_tool
+        self._send_tool_result = send_tool_result
+        self._create_response = create_response
+        self._create_message = create_message
+        self._enqueue_output = enqueue_output
+        self._get_camera_frame = get_camera_frame
+        self._head_wobbler_reset = head_wobbler_reset
+
+    async def on_tool_call_done(
+        self,
+        *,
+        tool_name: str,
+        args_json: str,
+        call_id: str | None,
+        is_idle: bool,
+    ) -> bool:
+        """Handle a completed tool call. Returns True if the idle flag was consumed."""
+        logger.info("Tool requested: %s args=%s", tool_name, _short_text(args_json))
+
+        effective_args_json = args_json
+        idle_mmwave_sweep_used = False
+        tool_result: dict[str, Any]
+
+        # Idle policy: suppress non-mmWave tools when mmWave is available
+        if is_idle and self._has_tool("mmWave") and tool_name != "mmWave":
+            tool_result = {
+                "status": "skipped",
+                "reason": (
+                    f"idle tool '{tool_name}' suppressed; "
+                    "using passive mmWave idle policy"
+                ),
+            }
+            logger.info("Idle policy suppressed tool: %s", tool_name)
+        else:
+            # Override mmWave args during idle
+            if is_idle and tool_name == "mmWave":
+                now = asyncio.get_event_loop().time()
+                idle_args = _safe_parse_args(args_json)
+                idle_mmwave_sweep_used = self._idle_policy.sweep_allowed(now)
+                idle_args["mode"] = "locate_and_measure"
+                idle_args["duration_s"] = self._idle_policy.probe_duration_s
+                idle_args["sweep_if_unseen"] = idle_mmwave_sweep_used
+                effective_args_json = json.dumps(idle_args)
+                if idle_mmwave_sweep_used:
+                    self._idle_policy.record_sweep_used(now)
+                logger.info(
+                    "Idle mmWave policy: misses=%d/%d, sweep_if_unseen=%s, args=%s",
+                    self._idle_policy.consecutive_misses,
+                    self._idle_policy.misses_before_sweep,
+                    idle_mmwave_sweep_used,
+                    _short_text(effective_args_json),
+                )
+
+            try:
+                tool_result = await self._dispatch_tool(tool_name, effective_args_json)
+                logger.debug("Tool '%s' executed successfully", tool_name)
+                logger.debug("Tool result: %s", tool_result)
+            except Exception as e:
+                logger.error("Tool '%s' failed", tool_name)
+                tool_result = {"error": str(e)}
+
+        # Idle mmWave result tracking
+        if is_idle and tool_name == "mmWave":
+            now = asyncio.get_event_loop().time()
+            if isinstance(tool_result, dict) and tool_result.get("error"):
+                logger.warning("Idle mmWave failed: %s", _short_text(tool_result.get("error")))
+            elif _mmwave_has_target(tool_result):
+                self._idle_policy.record_target_found(now)
+            elif _mmwave_is_no_target(tool_result):
+                self._idle_policy.record_no_target(sweep_was_used=idle_mmwave_sweep_used)
+            else:
+                self._idle_policy.record_inconclusive()
+
+        # Auto light_context after mmWave
+        if tool_name == "mmWave" and isinstance(tool_result, dict):
+            try:
+
+                async def _dispatch_light(name: str, args_json_str: str) -> dict[str, Any]:
+                    return await self._dispatch_tool(name, args_json_str)
+
+                auto_light_context = await self._light_orchestrator.run_from_mmwave(
+                    tool_result,
+                    is_idle=is_idle,
+                    has_tool=self._has_tool("light_context"),
+                    dispatch_fn=_dispatch_light,
+                )
+                if auto_light_context is not None:
+                    tool_result["light_context"] = auto_light_context
+                    logger.info(
+                        "Auto light_context state=%s mode=%s",
+                        auto_light_context.get("context_state"),
+                        auto_light_context.get("recommended_mode"),
+                    )
+            except Exception as e:
+                logger.warning("Auto light_context failed after mmWave: %s", e)
+
+        # Send tool result back to connection
+        if isinstance(call_id, str):
+            await self._send_tool_result(call_id, json.dumps(tool_result))
+
+        # Enqueue UI output
+        await self._enqueue_output(
+            {
+                "role": "assistant",
+                "content": json.dumps(tool_result),
+                "metadata": {"title": f"\U0001f6e0\ufe0f Used tool {tool_name}", "status": "done"},
+            },
+        )
+
+        # Camera image handling
+        if tool_name == "camera" and "b64_im" in tool_result:
+            await self._handle_camera_result(tool_result)
+
+        # Create response for non-idle calls
+        if is_idle:
+            pass  # no speech response for idle
+        else:
+            await self._create_response(
+                "Use the tool result just returned and answer concisely in speech.",
+            )
+
+        # Reset head wobbler after tool call
+        if self._head_wobbler_reset is not None:
+            self._head_wobbler_reset()
+
+        return is_idle  # consumed if it was an idle call
+
+    async def _handle_camera_result(self, tool_result: dict[str, Any]) -> None:
+        """Handle camera tool result: send image to conversation and UI."""
+        import cv2
+        import gradio as gr
+
+        b64_im = tool_result["b64_im"]
+        if not isinstance(b64_im, str):
+            logger.warning("Unexpected type for b64_im: %s", type(b64_im))
+            b64_im = str(b64_im)
+
+        await self._create_message(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/jpeg;base64,{b64_im}",
+                    },
+                ],
+            },
+        )
+        logger.info("Added camera image to conversation")
+
+        np_img = self._get_camera_frame()
+        if np_img is not None:
+            rgb_frame = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
+        else:
+            rgb_frame = None
+        img = gr.Image(value=rgb_frame)
+
+        await self._enqueue_output(
+            {
+                "role": "assistant",
+                "content": img,
+            },
+        )
