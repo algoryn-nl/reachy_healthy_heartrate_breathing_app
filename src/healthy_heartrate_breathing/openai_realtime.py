@@ -159,41 +159,25 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Cost tracking
         self.cumulative_cost: float = 0.0
 
-        # Idle scanning policy (calm by default):
-        # - passive probe every ~40s
-        # - run a sweep only after repeated misses
-        # - cooldown between sweeps
-        # - stay quiet for a short window after a confirmed focus
-        self._idle_default_interval_s = env_float(
-            "HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S", 15.0, min_value=1.0
-        )
-        self._idle_mmwave_probe_interval_s = env_float(
-            "HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S", 40.0, min_value=1.0
-        )
-        self._idle_mmwave_probe_duration_s = env_float(
-            "HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S", 5.0, min_value=0.5
-        )
-        self._idle_mmwave_misses_before_sweep = env_int(
-            "HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP", 3, min_value=1
-        )
-        self._idle_mmwave_sweep_cooldown_s = env_float(
-            "HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S", 150.0, min_value=1.0
-        )
-        self._idle_mmwave_consecutive_misses = 0
-        self._idle_mmwave_last_sweep_time: float | None = None
-        self._idle_mmwave_last_focus_time: float | None = None
-        self._idle_mmwave_post_focus_quiet_s = env_float(
-            "HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S", 45.0, min_value=0.0
+        # Idle scanning policy (delegates to IdlePolicy)
+        from healthy_heartrate_breathing.idle_policy import IdlePolicy
+
+        self.idle_policy = IdlePolicy(
+            interval_s=env_float("HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S", 15.0, min_value=1.0),
+            probe_interval_s=env_float("HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S", 40.0, min_value=1.0),
+            probe_duration_s=env_float("HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S", 5.0, min_value=0.5),
+            misses_before_sweep=env_int("HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP", 3, min_value=1),
+            sweep_cooldown_s=env_float("HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S", 150.0, min_value=1.0),
+            post_focus_quiet_s=env_float("HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S", 45.0, min_value=0.0),
         )
         logger.info(
-            "mmWave idle policy: default_idle=%.1fs, probe_interval=%.1fs, probe_duration=%.1fs, "
+            "mmWave idle policy: probe_interval=%.1fs, probe_duration=%.1fs, "
             "misses_before_sweep=%d, sweep_cooldown=%.1fs, post_focus_quiet=%.1fs",
-            self._idle_default_interval_s,
-            self._idle_mmwave_probe_interval_s,
-            self._idle_mmwave_probe_duration_s,
-            self._idle_mmwave_misses_before_sweep,
-            self._idle_mmwave_sweep_cooldown_s,
-            self._idle_mmwave_post_focus_quiet_s,
+            self.idle_policy.probe_interval_s,
+            self.idle_policy.probe_duration_s,
+            self.idle_policy.misses_before_sweep,
+            self.idle_policy.sweep_cooldown_s,
+            self.idle_policy.post_focus_quiet_s,
         )
 
         # Light-context policy orchestration (optional, suggest-only):
@@ -229,14 +213,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
     def _has_tool(self, name: str) -> bool:
         """Return whether a given tool name is available in this session."""
         return any(spec.get("name") == name for spec in get_tool_specs())
-
-    def _idle_mmwave_sweep_allowed(self, now: float) -> bool:
-        """Decide whether the next idle mmWave call may include a sweep."""
-        if self._idle_mmwave_consecutive_misses < self._idle_mmwave_misses_before_sweep:
-            return False
-        if self._idle_mmwave_last_sweep_time is None:
-            return True
-        return (now - self._idle_mmwave_last_sweep_time) >= self._idle_mmwave_sweep_cooldown_s
 
     def _resolve_runtime_data_path(self, filename: str) -> Path:
         """Resolve a writable path for runtime policy/analytics data."""
@@ -770,17 +746,17 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         if self.is_idle_tool_call and tool_name == "mmWave":
                             now = asyncio.get_event_loop().time()
                             idle_args = _safe_parse_args(args_json_str)
-                            idle_mmwave_sweep_used = self._idle_mmwave_sweep_allowed(now)
+                            idle_mmwave_sweep_used = self.idle_policy.sweep_allowed(now)
                             idle_args["mode"] = "locate_and_measure"
-                            idle_args["duration_s"] = self._idle_mmwave_probe_duration_s
+                            idle_args["duration_s"] = self.idle_policy.probe_duration_s
                             idle_args["sweep_if_unseen"] = idle_mmwave_sweep_used
                             effective_args_json = json.dumps(idle_args)
                             if idle_mmwave_sweep_used:
-                                self._idle_mmwave_last_sweep_time = now
+                                self.idle_policy.record_sweep_used(now)
                             logger.info(
                                 "Idle mmWave policy: misses=%d/%d, sweep_if_unseen=%s, args=%s",
-                                self._idle_mmwave_consecutive_misses,
-                                self._idle_mmwave_misses_before_sweep,
+                                self.idle_policy.consecutive_misses,
+                                self.idle_policy.misses_before_sweep,
                                 idle_mmwave_sweep_used,
                                 _short_text(effective_args_json),
                             )
@@ -798,25 +774,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                         if isinstance(tool_result, dict) and tool_result.get("error"):
                             logger.warning("Idle mmWave failed: %s", _short_text(tool_result.get("error")))
                         elif _mmwave_has_target(tool_result):
-                            self._idle_mmwave_consecutive_misses = 0
-                            self._idle_mmwave_last_focus_time = now
-                            logger.info("Idle mmWave detected a target; miss counter reset.")
+                            self.idle_policy.record_target_found(now)
                         elif _mmwave_is_no_target(tool_result):
-                            if idle_mmwave_sweep_used:
-                                self._idle_mmwave_consecutive_misses = 0
-                                logger.info("Idle mmWave sweep found no target; miss counter reset.")
-                            else:
-                                self._idle_mmwave_consecutive_misses += 1
-                                logger.info(
-                                    "Idle mmWave no target (miss %d/%d before sweep).",
-                                    self._idle_mmwave_consecutive_misses,
-                                    self._idle_mmwave_misses_before_sweep,
-                                )
+                            self.idle_policy.record_no_target(sweep_was_used=idle_mmwave_sweep_used)
                         else:
-                            logger.info(
-                                "Idle mmWave inconclusive; miss counter unchanged at %d.",
-                                self._idle_mmwave_consecutive_misses,
-                            )
+                            self.idle_policy.record_inconclusive()
 
                     if tool_name == "mmWave" and isinstance(tool_result, dict):
                         try:
@@ -967,16 +929,13 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Handle idle
         now = asyncio.get_event_loop().time()
         has_mmwave = self._has_tool("mmWave")
-        idle_interval = self._idle_mmwave_probe_interval_s if has_mmwave else self._idle_default_interval_s
+        idle_interval = self.idle_policy.probe_interval_s if has_mmwave else self.idle_policy.interval_s
         idle_duration = now - self.last_activity_time
-        if idle_duration > idle_interval and self.deps.movement_manager.is_idle():
-            if has_mmwave and self._idle_mmwave_last_focus_time is not None:
-                since_focus = now - self._idle_mmwave_last_focus_time
-                if since_focus < self._idle_mmwave_post_focus_quiet_s:
-                    remaining = self._idle_mmwave_post_focus_quiet_s - since_focus
-                    logger.debug("Idle mmWave quiet window active (%.1fs remaining); staying still.", remaining)
-                    self.last_activity_time = now
-                    return None
+        is_moving = not self.deps.movement_manager.is_idle()
+        if idle_duration > idle_interval and not is_moving:
+            if has_mmwave and not self.idle_policy.should_trigger(idle_duration, is_moving=False, now=now):
+                self.last_activity_time = now
+                return None
             try:
                 await self.send_idle_signal(idle_duration)
             except Exception as e:
@@ -1098,28 +1057,24 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         has_mmwave = self._has_tool("mmWave")
         if has_mmwave:
             now = asyncio.get_event_loop().time()
-            sweep_allowed = self._idle_mmwave_sweep_allowed(now)
-            if sweep_allowed:
-                strategy = "run one slow scan sweep if no target is found"
-                sweep_flag = "true"
-            else:
-                strategy = "do a passive check only and stay still if no target is found"
-                sweep_flag = "false"
+            sweep_allowed = self.idle_policy.sweep_allowed(now)
+            strategy = self.idle_policy.build_strategy_message(sweep_allowed)
+            sweep_flag = "true" if sweep_allowed else "false"
             timestamp_msg = (
                 f"[Idle time update: {self.format_timestamp()} - No activity for {idle_duration:.1f}s] "
                 "Do one calm wellness scan cycle."
             )
             idle_instructions = (
                 "You MUST respond with function calls only - no speech or text. "
-                f"Call mmWave exactly once with mode='locate_and_measure', duration_s={self._idle_mmwave_probe_duration_s}, "
+                f"Call mmWave exactly once with mode='locate_and_measure', duration_s={self.idle_policy.probe_duration_s}, "
                 f"sweep_if_unseen={sweep_flag}. Then stop. "
                 f"Current strategy: {strategy}. "
                 "Do not call dance, play_emotion, or sweep_look for this idle cycle."
             )
             logger.info(
                 "Idle schedule: mmWave probe (misses=%d/%d, sweep_allowed=%s)",
-                self._idle_mmwave_consecutive_misses,
-                self._idle_mmwave_misses_before_sweep,
+                self.idle_policy.consecutive_misses,
+                self.idle_policy.misses_before_sweep,
                 sweep_allowed,
             )
         else:
