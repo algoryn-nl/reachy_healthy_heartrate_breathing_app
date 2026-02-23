@@ -8,8 +8,12 @@ avoid coupling and keep responsibilities clear for headless mode.
 """
 
 from __future__ import annotations
+import logging
 from typing import List
 from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_OPTION = "(built-in default)"
@@ -53,7 +57,7 @@ def list_personalities() -> List[str]:
                 if p.is_dir() and (p / "instructions.txt").exists():
                     names.append(f"user_personalities/{p.name}")
     except Exception:
-        pass
+        logger.warning("Failed to list personality profiles", exc_info=True)
     return names
 
 
@@ -83,14 +87,14 @@ def available_tools_for(selected: str) -> List[str]:
                 continue
             shared.append(py.stem)
     except Exception:
-        pass
+        logger.warning("Failed to list shared tools", exc_info=True)
     local: List[str] = []
     try:
         if selected != DEFAULT_OPTION:
             for py in resolve_profile_dir(selected).glob("*.py"):
                 local.append(py.stem)
     except Exception:
-        pass
+        logger.warning("Failed to list local tools for %r", selected, exc_info=True)
     return sorted(set(shared + local))
 
 
