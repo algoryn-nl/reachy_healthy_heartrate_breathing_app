@@ -18,6 +18,8 @@ def _reload_core_tools() -> ModuleType:
 
     sys.modules.pop("healthy_heartrate_breathing.tools.core_tools", None)
     core_tools_mod = importlib.import_module("healthy_heartrate_breathing.tools.core_tools")
+    # Trigger lazy initialization after reload.
+    core_tools_mod._initialize_tools()
     return core_tools_mod
 
 

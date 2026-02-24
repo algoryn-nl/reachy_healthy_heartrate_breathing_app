@@ -15,8 +15,8 @@
 ### Upcoming — Medium Priority
 
 - [ ] Reset idle tool call flag on exception path (openai_realtime.py:538-583)
-- [ ] Refactor tool registry to avoid global side effects at import (core_tools.py:286)
-- [ ] Validate tool loading matches tools.txt expectations (core_tools.py:143-264)
+- [x] Refactor tool registry to lazy init — no disk I/O or sys.exit at import time (2026-02-24)
+- [x] Validate tool loading matches tools.txt — warns on unregistered tool names (2026-02-24)
 - [ ] Pin Gradio to stable version (pyproject.toml)
 - [ ] Add mypy coverage for tests/ (pyproject.toml)
 - [ ] Resolve Python version mismatch: requires-python >=3.10 vs mypy target 3.12
@@ -59,7 +59,7 @@
 ### Technical Debt
 
 - `_run_realtime_session()` decomposition complete — 5 handler classes extracted (IdlePolicy, LightOrchestrator, TranscriptHandler, ToolDispatcher, AudioRouter)
-- Tool registry initializes at import time with disk I/O and potential `sys.exit(1)`
+- ~~Tool registry initializes at import time with disk I/O and potential `sys.exit(1)`~~ (fixed: lazy init + ToolRegistryError, 2026-02-24)
 - Test coverage inversely correlates with module size (`openai_realtime.py` worst)
 
 ### Recurring Issues & Solutions

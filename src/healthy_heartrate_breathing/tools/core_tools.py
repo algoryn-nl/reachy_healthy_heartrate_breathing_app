@@ -1,7 +1,7 @@
 from __future__ import annotations
+import os
 import re
 import abc
-import os
 import sys
 import json
 import inspect
@@ -29,6 +29,10 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+
+
+class ToolRegistryError(RuntimeError):
+    """Fatal error during tool registry initialization."""
 
 
 ALL_TOOLS: Dict[str, "Tool"] = {}
@@ -140,8 +144,14 @@ def _format_error(error: Exception) -> str:
 
 
 # Registry & specs (dynamic)
-def _load_profile_tools() -> None:
-    """Load tools based on profile's tools.txt file."""
+def _load_profile_tools() -> list[str]:
+    """Load tools based on profile's tools.txt file.
+
+    Returns the list of tool names that were requested (from tools.txt
+    plus any auto-discovered external tools).
+
+    Raises ToolRegistryError if tools.txt is missing or unreadable.
+    """
     # Determine which profile to use
     profile = config.REACHY_MINI_CUSTOM_PROFILE or "default"
     logger.info(f"Loading tools for profile: {profile}")
@@ -169,16 +179,14 @@ def _load_profile_tools() -> None:
             )
             tools_txt_path = default_tools_txt_path
         else:
-            logger.error(f"✗ tools.txt not found at {tools_txt_path}")
-            sys.exit(1)
+            raise ToolRegistryError(f"tools.txt not found at {tools_txt_path}")
 
     # Read and parse tools.txt
     try:
         with open(tools_txt_path, "r") as f:
             lines = f.readlines()
     except Exception as e:
-        logger.error(f"✗ Failed to read tools.txt: {e}")
-        sys.exit(1)
+        raise ToolRegistryError(f"Failed to read tools.txt: {e}") from e
 
     # Parse tool names (skip comments and blank lines)
     tool_names = []
@@ -262,6 +270,7 @@ def _load_profile_tools() -> None:
                 logger.error(f"❌ Failed to load shared tool '{tool_name}': {_format_error(e)}")
                 logger.error(f"  Module path: {shared_module_path}")
 
+    return tool_names
 
 
 def _initialize_tools() -> None:
@@ -272,7 +281,7 @@ def _initialize_tools() -> None:
         logger.debug("Tools already initialized; skipping reinitialization.")
         return
 
-    _load_profile_tools()
+    requested_names = _load_profile_tools()
 
     ALL_TOOLS = {cls.name: cls() for cls in get_concrete_subclasses(Tool)}  # type: ignore[type-abstract]
     ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]
@@ -280,14 +289,20 @@ def _initialize_tools() -> None:
     for tool_name, tool in ALL_TOOLS.items():
         logger.info(f"tool registered: {tool_name} - {tool.description}")
 
+    missing = [name for name in requested_names if name not in ALL_TOOLS]
+    if missing:
+        logger.warning(
+            "tools.txt requested %d tool(s) that did not register a Tool subclass: %s",
+            len(missing),
+            missing,
+        )
+
     _TOOLS_INITIALIZED = True
-
-
-_initialize_tools()
 
 
 def get_tool_specs(exclusion_list: list[str] | None = None) -> list[Dict[str, Any]]:
     """Get tool specs, optionally excluding some tools."""
+    _initialize_tools()
     excluded = set(exclusion_list or [])
     excluded.update(_get_env_disabled_tools())
     return [spec for spec in ALL_TOOL_SPECS if spec.get("name") not in excluded]
@@ -305,6 +320,7 @@ def _safe_load_obj(args_json: str) -> Dict[str, Any]:
 
 async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependencies) -> Dict[str, Any]:
     """Dispatch a tool call by name with JSON args and dependencies."""
+    _initialize_tools()
     if tool_name in _get_env_disabled_tools():
         return {
             "status": "disabled",

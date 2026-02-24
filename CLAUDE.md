@@ -166,7 +166,7 @@ Key configuration (see `.env.example`):
 
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
-- The tool registry is module-global and initializes on first import of `core_tools`
+- The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
 
 ## Documentation Maintenance
 
