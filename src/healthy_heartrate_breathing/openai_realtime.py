@@ -132,6 +132,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             low_lux_threshold=env_float("HEALTHY_LIGHT_LOW_LUX_THRESHOLD", 40.0, min_value=0.0),
             baseline_alpha=env_float("HEALTHY_LIGHT_BASELINE_ALPHA", 0.15, min_value=0.01, max_value=1.0),
             baseline_min_samples=env_int("HEALTHY_LIGHT_BASELINE_MIN_SAMPLES", 5, min_value=1),
+            baseline_max_age_days=env_int("HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS", 90, min_value=1),
             baseline_path=self._resolve_runtime_data_path("light_context_baseline.json"),
             analytics_path=self._resolve_runtime_data_path("light_context_analytics.jsonl"),
         )

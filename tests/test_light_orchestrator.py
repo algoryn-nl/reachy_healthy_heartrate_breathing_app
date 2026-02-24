@@ -4,6 +4,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -115,6 +116,129 @@ class TestBaselineThrottling:
         o.baseline_path.unlink()  # remove file
         o.flush()  # should not recreate it
         assert not o.baseline_path.exists()
+
+
+class TestBaselinePruning:
+    def test_stale_user_pruned_on_load(self, tmp_path: Path) -> None:
+        stale_ts = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        state = {
+            "schema_version": 1,
+            "users": {
+                "old-user": {
+                    "hours": {"12": {"ema_lux": 100.0, "samples": 10}},
+                    "updated_at": stale_ts,
+                },
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state))
+
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert "old-user" not in o._baseline_state["users"]
+
+    def test_fresh_user_kept_on_load(self, tmp_path: Path) -> None:
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        state = {
+            "schema_version": 1,
+            "users": {
+                "recent-user": {
+                    "hours": {"12": {"ema_lux": 200.0, "samples": 5}},
+                    "updated_at": fresh_ts,
+                },
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state))
+
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert "recent-user" in o._baseline_state["users"]
+
+    def test_mixed_stale_and_fresh(self, tmp_path: Path) -> None:
+        stale_ts = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        state = {
+            "schema_version": 1,
+            "users": {
+                "stale": {
+                    "hours": {"10": {"ema_lux": 50.0, "samples": 3}},
+                    "updated_at": stale_ts,
+                },
+                "fresh": {
+                    "hours": {"14": {"ema_lux": 300.0, "samples": 8}},
+                    "updated_at": fresh_ts,
+                },
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state))
+
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert "stale" not in o._baseline_state["users"]
+        assert "fresh" in o._baseline_state["users"]
+
+    def test_malformed_timestamp_pruned(self, tmp_path: Path) -> None:
+        state = {
+            "schema_version": 1,
+            "users": {
+                "bad-ts": {
+                    "hours": {"12": {"ema_lux": 100.0, "samples": 1}},
+                    "updated_at": "not-a-date",
+                },
+                "no-ts": {
+                    "hours": {"12": {"ema_lux": 100.0, "samples": 1}},
+                },
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state))
+
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert "bad-ts" not in o._baseline_state["users"]
+        assert "no-ts" not in o._baseline_state["users"]
+
+    def test_pruning_persists_to_disk(self, tmp_path: Path) -> None:
+        stale_ts = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        state = {
+            "schema_version": 1,
+            "users": {
+                "stale": {
+                    "hours": {"12": {"ema_lux": 50.0, "samples": 3}},
+                    "updated_at": stale_ts,
+                },
+                "fresh": {
+                    "hours": {"14": {"ema_lux": 300.0, "samples": 8}},
+                    "updated_at": fresh_ts,
+                },
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state))
+
+        _orchestrator(tmp_path, baseline_max_age_days=90)
+        # Pruned state should be saved to disk
+        reloaded = json.loads(baseline_path.read_text())
+        assert "stale" not in reloaded["users"]
+        assert "fresh" in reloaded["users"]
+
+    def test_no_pruning_when_all_fresh(self, tmp_path: Path) -> None:
+        fresh_ts = datetime.now(timezone.utc).isoformat()
+        state = {
+            "schema_version": 1,
+            "users": {
+                "user-a": {
+                    "hours": {"12": {"ema_lux": 100.0, "samples": 5}},
+                    "updated_at": fresh_ts,
+                },
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state))
+
+        o = _orchestrator(tmp_path, baseline_max_age_days=90, baseline_save_interval_s=300)
+        assert "user-a" in o._baseline_state["users"]
+        # No pruning happened, so dirty flag should not be set
+        assert o._baseline_dirty is False
 
 
 class TestRunFromMmwave:

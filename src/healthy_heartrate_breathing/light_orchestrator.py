@@ -6,7 +6,7 @@ import time
 import logging
 from typing import Any, Callable, Awaitable
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from healthy_heartrate_breathing.env_utils import extract_lux_from_mmwave_result
 
@@ -38,6 +38,7 @@ class LightOrchestrator:
         baseline_path: Path | None = None,
         analytics_path: Path | None = None,
         baseline_save_interval_s: float = 60.0,
+        baseline_max_age_days: int = 90,
     ) -> None:
         self.enabled = enabled
         self.analytics_enabled = analytics_enabled
@@ -53,6 +54,7 @@ class LightOrchestrator:
         self.baseline_path = baseline_path
         self.analytics_path = analytics_path
         self.baseline_save_interval_s = baseline_save_interval_s
+        self.baseline_max_age_days = baseline_max_age_days
 
         # Mutable state
         self._baseline_state: dict[str, Any] = {"schema_version": 1, "users": {}}
@@ -85,6 +87,9 @@ class LightOrchestrator:
             if not isinstance(users, dict):
                 parsed["users"] = {}
             self._baseline_state = parsed
+            if self._prune_stale_users():
+                self._baseline_dirty = True
+                self.save_baseline()
         except Exception as e:
             logger.warning("Failed loading light baseline from %s: %s", self.baseline_path, e)
             self._baseline_state = default
@@ -119,6 +124,32 @@ class LightOrchestrator:
             self._last_save_time = now
         except Exception as e:
             logger.warning("Failed writing light baseline to %s: %s", self.baseline_path, e)
+
+    def _prune_stale_users(self) -> bool:
+        """Remove user entries older than baseline_max_age_days. Return True if any removed."""
+        users = self._baseline_state.get("users")
+        if not isinstance(users, dict) or not users:
+            return False
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.baseline_max_age_days)
+        stale = []
+        for uid, entry in users.items():
+            if not isinstance(entry, dict):
+                stale.append(uid)
+                continue
+            ts = entry.get("updated_at")
+            if not isinstance(ts, str):
+                stale.append(uid)
+                continue
+            try:
+                updated = datetime.fromisoformat(ts)
+                if updated < cutoff:
+                    stale.append(uid)
+            except (ValueError, TypeError):
+                stale.append(uid)
+        for uid in stale:
+            del users[uid]
+            logger.info("Pruned stale light baseline for user %r", uid)
+        return len(stale) > 0
 
     # ---- Time helpers ----
 

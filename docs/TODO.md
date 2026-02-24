@@ -23,7 +23,7 @@
 
 ### Upcoming — Low Priority
 
-- [ ] Add baseline pruning to LightOrchestrator (unbounded per-hour growth)
+- [x] Add baseline pruning to LightOrchestrator (unbounded per-hour growth) (2026-02-24)
 - [ ] Use `decimal.Decimal` for cost tracking (openai_realtime.py:43-55)
 - [ ] Extract magic numbers in moves.py to named constants (lines 266-282)
 - [ ] Remove dead commented-out code in HeadWobbler (head_wobbler.py:149-157)
