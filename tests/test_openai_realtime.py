@@ -288,7 +288,7 @@ async def test_connection_cleared_on_event_loop_exception(monkeypatch: Any) -> N
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = rt_mod.OpenaiRealtimeHandler(deps)
-    handler.client = FakeClient()
+    handler.client = FakeClient()  # type: ignore[assignment]
 
     # Call _run_realtime_session directly (as _restart_session does via create_task)
     with pytest.raises(RuntimeError, match="event loop crash"):
@@ -354,7 +354,7 @@ async def test_connection_cleared_on_restart_failure(monkeypatch: Any) -> None:
 
     deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
     handler = rt_mod.OpenaiRealtimeHandler(deps)
-    handler.client = FakeClient()
+    handler.client = FakeClient()  # type: ignore[assignment]
 
     await handler._restart_session()
     # Give the background task time to run and fail
