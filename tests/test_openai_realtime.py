@@ -224,3 +224,139 @@ async def test_emit_returns_none_when_idle_signal_fails(monkeypatch: Any) -> Non
 
     result = await handler.emit()
     assert result is None
+
+
+# ---- Connection cleanup tests ----
+
+
+@pytest.mark.asyncio
+async def test_connection_cleared_on_event_loop_exception(monkeypatch: Any) -> None:
+    """self.connection must be None after event loop raises."""
+    FakeCCE = type("FakeCCE", (Exception,), {})
+    monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
+
+    class CrashConn:
+        """Connection that crashes during event iteration."""
+
+        def __init__(self) -> None:
+            class _Session:
+                async def update(self, **_kw: Any) -> None:
+                    return None
+
+            self.session = _Session()
+
+            class _Item:
+                async def create(self, **_kw: Any) -> None:
+                    return None
+
+            class _Conversation:
+                item = _Item()
+
+            self.conversation = _Conversation()
+
+            class _Response:
+                async def create(self, **_kw: Any) -> None:
+                    return None
+
+            self.response = _Response()
+
+        async def __aenter__(self) -> "CrashConn":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            return False
+
+        async def close(self) -> None:
+            return None
+
+        def __aiter__(self) -> "CrashConn":
+            return self
+
+        async def __anext__(self) -> None:
+            raise RuntimeError("event loop crash")
+
+    class FakeRealtime:
+        def connect(self, **_kw: Any) -> CrashConn:
+            return CrashConn()
+
+    class FakeClient:
+        def __init__(self, **_kw: Any) -> None:
+            self.realtime = FakeRealtime()
+
+    monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = rt_mod.OpenaiRealtimeHandler(deps)
+    handler.client = FakeClient()
+
+    # Call _run_realtime_session directly (as _restart_session does via create_task)
+    with pytest.raises(RuntimeError, match="event loop crash"):
+        await handler._run_realtime_session()
+
+    assert handler.connection is None, "connection must be cleared after event loop crash"
+    assert not handler._connected_event.is_set(), "connected event must be cleared"
+
+
+@pytest.mark.asyncio
+async def test_connection_cleared_on_restart_failure(monkeypatch: Any) -> None:
+    """_restart_session cleans up even when new session fails during event loop."""
+    FakeCCE = type("FakeCCE", (Exception,), {})
+    monkeypatch.setattr(rt_mod, "ConnectionClosedError", FakeCCE)
+
+    class FailConn:
+        def __init__(self) -> None:
+            class _Session:
+                async def update(self, **_kw: Any) -> None:
+                    return None
+
+            self.session = _Session()
+
+            class _Item:
+                async def create(self, **_kw: Any) -> None:
+                    return None
+
+            class _Conversation:
+                item = _Item()
+
+            self.conversation = _Conversation()
+
+            class _Response:
+                async def create(self, **_kw: Any) -> None:
+                    return None
+
+            self.response = _Response()
+
+        async def __aenter__(self) -> "FailConn":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+            return False
+
+        async def close(self) -> None:
+            return None
+
+        def __aiter__(self) -> "FailConn":
+            return self
+
+        async def __anext__(self) -> None:
+            raise RuntimeError("restart crash")
+
+    class FakeRealtime:
+        def connect(self, **_kw: Any) -> FailConn:
+            return FailConn()
+
+    class FakeClient:
+        def __init__(self, **_kw: Any) -> None:
+            self.realtime = FakeRealtime()
+
+    monkeypatch.setattr(rt_mod, "AsyncOpenAI", FakeClient)
+
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = rt_mod.OpenaiRealtimeHandler(deps)
+    handler.client = FakeClient()
+
+    await handler._restart_session()
+    # Give the background task time to run and fail
+    await asyncio.sleep(0.1)
+
+    assert handler.connection is None, "connection must be cleaned up after restart failure"

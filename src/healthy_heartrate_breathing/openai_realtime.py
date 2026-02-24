@@ -416,67 +416,68 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             self.connection = conn
             try:
                 self._connected_event.set()
-            except Exception:
-                logger.debug("Failed to set connected event after session init", exc_info=True)
 
-            async for event in self.connection:
-                logger.debug("OpenAI event: %s", event.type)
+                async for event in self.connection:
+                    logger.debug("OpenAI event: %s", event.type)
 
-                if event.type == "input_audio_buffer.speech_started":
-                    if hasattr(self, "_clear_queue") and callable(self._clear_queue):
-                        self._clear_queue()
-                    if self.deps.head_wobbler is not None:
-                        self.deps.head_wobbler.reset()
-                    self.deps.movement_manager.set_listening(True)
+                    if event.type == "input_audio_buffer.speech_started":
+                        if hasattr(self, "_clear_queue") and callable(self._clear_queue):
+                            self._clear_queue()
+                        if self.deps.head_wobbler is not None:
+                            self.deps.head_wobbler.reset()
+                        self.deps.movement_manager.set_listening(True)
 
-                elif event.type == "input_audio_buffer.speech_stopped":
-                    self.deps.movement_manager.set_listening(False)
+                    elif event.type == "input_audio_buffer.speech_stopped":
+                        self.deps.movement_manager.set_listening(False)
 
-                elif event.type == "response.done":
-                    response = getattr(event, "response", None)
-                    usage = getattr(response, "usage", None) if response else None
-                    if usage:
-                        cost = _compute_response_cost(usage)
-                        self.cumulative_cost += cost
-                        logger.debug("Cost: $%.4f | Cumulative: $%.4f", cost, self.cumulative_cost)
-                    else:
-                        logger.warning("No usage data available for cost tracking")
+                    elif event.type == "response.done":
+                        response = getattr(event, "response", None)
+                        usage = getattr(response, "usage", None) if response else None
+                        if usage:
+                            cost = _compute_response_cost(usage)
+                            self.cumulative_cost += cost
+                            logger.debug("Cost: $%.4f | Cumulative: $%.4f", cost, self.cumulative_cost)
+                        else:
+                            logger.warning("No usage data available for cost tracking")
 
-                elif event.type == "conversation.item.input_audio_transcription.partial":
-                    await transcript.on_partial(event.transcript)
+                    elif event.type == "conversation.item.input_audio_transcription.partial":
+                        await transcript.on_partial(event.transcript)
 
-                elif event.type == "conversation.item.input_audio_transcription.completed":
-                    await transcript.on_user_completed(event.transcript)
+                    elif event.type == "conversation.item.input_audio_transcription.completed":
+                        await transcript.on_user_completed(event.transcript)
 
-                elif event.type in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
-                    await transcript.on_assistant_done(event.transcript)
+                    elif event.type in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
+                        await transcript.on_assistant_done(event.transcript)
 
-                elif event.type in ("response.audio.delta", "response.output_audio.delta"):
-                    await audio.on_audio_delta(event.delta)
+                    elif event.type in ("response.audio.delta", "response.output_audio.delta"):
+                        await audio.on_audio_delta(event.delta)
 
-                elif event.type == "response.function_call_arguments.done":
-                    tool_name = getattr(event, "name", None)
-                    args_json_str = getattr(event, "arguments", None)
-                    call_id = getattr(event, "call_id", None)
-                    if not isinstance(tool_name, str) or not isinstance(args_json_str, str):
-                        logger.error("Invalid tool call: tool_name=%s, args=%s", tool_name, args_json_str)
-                        continue
-                    dispatcher.dispatch(
-                        tool_name=tool_name,
-                        args_json=args_json_str,
-                        call_id=call_id,
-                        is_idle=self.is_idle_tool_call,
-                    )
-                    if self.is_idle_tool_call:
-                        self.is_idle_tool_call = False
+                    elif event.type == "response.function_call_arguments.done":
+                        tool_name = getattr(event, "name", None)
+                        args_json_str = getattr(event, "arguments", None)
+                        call_id = getattr(event, "call_id", None)
+                        if not isinstance(tool_name, str) or not isinstance(args_json_str, str):
+                            logger.error("Invalid tool call: tool_name=%s, args=%s", tool_name, args_json_str)
+                            continue
+                        dispatcher.dispatch(
+                            tool_name=tool_name,
+                            args_json=args_json_str,
+                            call_id=call_id,
+                            is_idle=self.is_idle_tool_call,
+                        )
+                        if self.is_idle_tool_call:
+                            self.is_idle_tool_call = False
 
-                elif event.type == "error":
-                    err = getattr(event, "error", None)
-                    msg = getattr(err, "message", str(err) if err else "unknown error")
-                    code = getattr(err, "code", "")
-                    logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
-                    if code not in ("input_audio_buffer_commit_empty", "conversation_already_has_active_response"):
-                        await _enqueue_output({"role": "assistant", "content": f"[error] {msg}"})
+                    elif event.type == "error":
+                        err = getattr(event, "error", None)
+                        msg = getattr(err, "message", str(err) if err else "unknown error")
+                        code = getattr(err, "code", "")
+                        logger.error("Realtime error [%s]: %s (raw=%s)", code, msg, err)
+                        if code not in ("input_audio_buffer_commit_empty", "conversation_already_has_active_response"):
+                            await _enqueue_output({"role": "assistant", "content": f"[error] {msg}"})
+            finally:
+                self.connection = None
+                self._connected_event.clear()
 
     # Microphone receive
     async def receive(self, frame: Tuple[int, NDArray[np.int16]]) -> None:
