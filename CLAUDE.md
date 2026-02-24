@@ -219,6 +219,7 @@ The project includes a custom hardware component under `hardware/`.
 - Two trigger gates: idle duration exceeded AND robot stationary AND post-focus quiet expired
 - Escalating sweep behavior: passive probes first, physical head sweep only after N consecutive misses with cooldown
 - Post-focus quiet window suppresses probes after a confirmed target
+- **Disconnect handling**: consecutive sensor errors tracked; after `errors_before_suppression` (default 3) errors, probing suppressed for `error_backoff_s` (default 120s) before retry; successful communication auto-resets
 - All timing configurable via `HEALTHY_MM_WAVE_*` env vars
 - Full state diagram and transition table in `idle_policy.py` module docstring
 
@@ -229,9 +230,10 @@ The headless settings page (`static/index.html` + `static/main.js` + `static/sty
 - **Target count**: number of detected targets, with truncation warning if >8 targets exceed the wire cap
 - **Heart rate / Breathing rate**: vitals when available (from `measure` or `locate_and_measure`)
 - **Ambient light**: lux reading from the BH1750 sensor
+- **Disconnected state**: when the sensor returns errors, the chip shows "Disconnected" with an error banner; stale data (>120s) shows "Stale" chip
 - **Last scan mode and timestamp**
 
-Data flows: mmWave tool result → `extract_sensor_state()` in `tool_dispatcher.py` → `handler.sensor_state` dict → `GET /sensor` REST endpoint in `console.py` → frontend polls every 3 seconds.
+Data flows: mmWave tool result (including errors) → `extract_sensor_state()` in `tool_dispatcher.py` → `handler.sensor_state` dict (replaced, not merged, to clear stale error keys) → `GET /sensor` REST endpoint in `console.py` → frontend polls every 3 seconds.
 
 ### Light Context System
 
@@ -393,6 +395,8 @@ Key configuration (see `.env.example`):
 | `HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP` | `3` | Consecutive misses before physical sweep |
 | `HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S` | `150.0` | Cooldown between sweeps (seconds) |
 | `HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S` | `45.0` | Quiet window after confirmed target (seconds) |
+| `HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION` | `3` | Consecutive sensor errors before suppressing probes |
+| `HEALTHY_MM_WAVE_ERROR_BACKOFF_S` | `120.0` | Seconds to wait before retry after error suppression |
 
 ### Light Context Policy
 

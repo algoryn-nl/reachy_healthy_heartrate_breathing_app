@@ -66,18 +66,25 @@ Transition diagram
         │                                      │
         └──────────────┬───────────────────────┘
                        ▼
-              ┌─── result? ───┐
-              │               │
-         has_target      no_target         inconclusive / error
-              │               │                    │
-              ▼               ▼                    ▼
-    record_target_found  record_no_target   record_inconclusive
-    · misses = 0         (passive):         · no state change
-    · last_focus_time    · misses += 1
-      = now              (after sweep):
-                         · misses = 0
+              ┌─── result? ───────────────────┐
+              │               │               │
+         has_target      no_target       error (disconnect)
+              │               │               │
+              ▼               ▼               ▼
+    record_target_found  record_no_target   record_error
+    · misses = 0         (passive):         · errors += 1
+    · errors = 0         · misses += 1      · last_error_time = now
+    · last_focus_time    · errors = 0       IF errors >= threshold:
+      = now              (after sweep):       suppress probes for
+                         · misses = 0         error_backoff_s seconds
                          record_sweep_used:
                          · last_sweep_time = now
+
+              inconclusive
+                  │
+                  ▼
+           record_inconclusive
+           · no state change
 
 Trigger gates (should_trigger)
 ------------------------------
@@ -100,16 +107,18 @@ Parameters
 ----------
 All configurable via environment variables (read at handler init):
 
-==================================  =======  =======================================  =========
-Parameter                           Default  Env Variable                             Constraint
-==================================  =======  =======================================  =========
-interval_s                          15.0     HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S  >= 1.0
-probe_interval_s                    40.0     HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S    >= 1.0
-probe_duration_s                     5.0     HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S    >= 0.5
-misses_before_sweep                  3       HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP      >= 1
-sweep_cooldown_s                   150.0     HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S         >= 1.0
-post_focus_quiet_s                  45.0     HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S       >= 0.0
-==================================  =======  =======================================  =========
+=====================================  =======  =============================================  =========
+Parameter                              Default  Env Variable                                   Constraint
+=====================================  =======  =============================================  =========
+interval_s                              15.0    HEALTHY_MM_WAVE_IDLE_DEFAULT_INTERVAL_S         >= 1.0
+probe_interval_s                        40.0    HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S            >= 1.0
+probe_duration_s                         5.0    HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S            >= 0.5
+misses_before_sweep                      3      HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP              >= 1
+sweep_cooldown_s                       150.0    HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S                 >= 1.0
+post_focus_quiet_s                      45.0    HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S               >= 0.0
+errors_before_suppression                3      HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION        >= 1
+error_backoff_s                        120.0    HEALTHY_MM_WAVE_ERROR_BACKOFF_S                  >= 1.0
+=====================================  =======  =============================================  =========
 
 Integration
 -----------
@@ -133,9 +142,19 @@ logger = logging.getLogger(__name__)
 class IdlePolicy:
     """Pure state machine managing idle mmWave scanning decisions.
 
-    Tracks consecutive misses, sweep cooldowns, and post-focus quiet windows
-    to decide when and how to probe.
+    Tracks consecutive misses, sweep cooldowns, post-focus quiet windows,
+    and consecutive errors to decide when and how to probe.
+
+    When the sensor reports errors (e.g. USB disconnect), the policy tracks
+    ``consecutive_errors`` and suppresses probing after
+    ``errors_before_suppression`` consecutive failures. Suppression lasts
+    ``error_backoff_s`` seconds, after which a single retry probe is allowed.
+    A successful result resets the error counter.
     """
+
+    # Default thresholds for error-based suppression
+    DEFAULT_ERRORS_BEFORE_SUPPRESSION: int = 3
+    DEFAULT_ERROR_BACKOFF_S: float = 120.0
 
     def __init__(  # noqa: D107
         self,
@@ -146,6 +165,8 @@ class IdlePolicy:
         misses_before_sweep: int = 3,
         sweep_cooldown_s: float = 150.0,
         post_focus_quiet_s: float = 45.0,
+        errors_before_suppression: int = DEFAULT_ERRORS_BEFORE_SUPPRESSION,
+        error_backoff_s: float = DEFAULT_ERROR_BACKOFF_S,
     ) -> None:
         self.interval_s = interval_s
         self.probe_interval_s = probe_interval_s
@@ -153,11 +174,15 @@ class IdlePolicy:
         self.misses_before_sweep = misses_before_sweep
         self.sweep_cooldown_s = sweep_cooldown_s
         self.post_focus_quiet_s = post_focus_quiet_s
+        self.errors_before_suppression = errors_before_suppression
+        self.error_backoff_s = error_backoff_s
 
         # Mutable state
         self.consecutive_misses: int = 0
         self.last_sweep_time: float | None = None
         self.last_focus_time: float | None = None
+        self.consecutive_errors: int = 0
+        self.last_error_time: float | None = None
 
     def sweep_allowed(self, now: float) -> bool:
         """Return True if a sweep is allowed given miss count and cooldown."""
@@ -166,6 +191,11 @@ class IdlePolicy:
         if self.last_sweep_time is None:
             return True
         return (now - self.last_sweep_time) >= self.sweep_cooldown_s
+
+    @property
+    def sensor_suppressed(self) -> bool:
+        """Return True when probing is suppressed due to repeated errors."""
+        return self.consecutive_errors >= self.errors_before_suppression
 
     def should_trigger(self, idle_duration: float, is_moving: bool, now: float) -> bool:
         """Return True if an idle probe should fire now."""
@@ -181,16 +211,35 @@ class IdlePolicy:
                     self.post_focus_quiet_s - since_focus,
                 )
                 return False
+        # After repeated sensor errors, back off and only allow occasional retries
+        if self.sensor_suppressed:
+            if self.last_error_time is not None and (now - self.last_error_time) < self.error_backoff_s:
+                logger.debug(
+                    "Idle probe suppressed: sensor error backoff (errors=%d, %.1fs remaining)",
+                    self.consecutive_errors,
+                    self.error_backoff_s - (now - self.last_error_time),
+                )
+                return False
+            # Backoff expired — allow one retry probe
+            logger.info("Idle probe: error backoff expired, allowing retry probe (errors=%d)", self.consecutive_errors)
         return True
 
     def record_target_found(self, now: float) -> None:
         """Record that mmWave detected a target."""
         self.consecutive_misses = 0
         self.last_focus_time = now
+        if self.consecutive_errors > 0:
+            logger.info("Idle mmWave sensor recovered after %d consecutive errors.", self.consecutive_errors)
+        self.consecutive_errors = 0
+        self.last_error_time = None
         logger.info("Idle mmWave detected target; miss counter reset.")
 
     def record_no_target(self, sweep_was_used: bool) -> None:
         """Record that mmWave found no target."""
+        if self.consecutive_errors > 0:
+            logger.info("Idle mmWave sensor recovered after %d consecutive errors.", self.consecutive_errors)
+        self.consecutive_errors = 0
+        self.last_error_time = None
         if sweep_was_used:
             self.consecutive_misses = 0
             logger.info("Idle mmWave sweep found no target; miss counter reset.")
@@ -205,6 +254,29 @@ class IdlePolicy:
     def record_inconclusive(self) -> None:
         """Record an inconclusive mmWave result (no state change)."""
         logger.info("Idle mmWave inconclusive; miss counter unchanged at %d.", self.consecutive_misses)
+
+    def record_error(self, now: float) -> None:
+        """Record an mmWave error (serial disconnect, timeout, etc.).
+
+        Increments the consecutive error counter and records the timestamp.
+        After ``errors_before_suppression`` consecutive errors, idle probing
+        is suppressed for ``error_backoff_s`` seconds before retrying.
+        """
+        self.consecutive_errors += 1
+        self.last_error_time = now
+        if self.consecutive_errors >= self.errors_before_suppression:
+            logger.warning(
+                "Idle mmWave sensor appears disconnected (%d consecutive errors); "
+                "suppressing probes for %.0fs.",
+                self.consecutive_errors,
+                self.error_backoff_s,
+            )
+        else:
+            logger.warning(
+                "Idle mmWave error (%d/%d before suppression).",
+                self.consecutive_errors,
+                self.errors_before_suppression,
+            )
 
     def record_sweep_used(self, now: float) -> None:
         """Record that a sweep was performed."""

@@ -32,6 +32,7 @@
 
 ### Done
 
+- [x] Graceful degradation when mmWave sensor disconnects mid-session — error tracking in IdlePolicy (record_error, consecutive error counter, backoff suppression), error propagation through ToolDispatcher to sensor_state, dashboard shows "Disconnected" chip + error banner, stale data detection (2026-02-24)
 - [x] Improve serial port auto-detection with VID/PID + HELLO probe (2026-02-23)
 - [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
 - [x] Advertise light sensor status in HELLO feature bits (2026-02-23)

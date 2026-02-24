@@ -111,6 +111,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             misses_before_sweep=env_int("HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP", 3, min_value=1),
             sweep_cooldown_s=env_float("HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S", 150.0, min_value=1.0),
             post_focus_quiet_s=env_float("HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S", 45.0, min_value=0.0),
+            errors_before_suppression=env_int("HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION", 3, min_value=1),
+            error_backoff_s=env_float("HEALTHY_MM_WAVE_ERROR_BACKOFF_S", 120.0, min_value=1.0),
         )
         logger.info(
             "mmWave idle policy: probe_interval=%.1fs, probe_duration=%.1fs, "
@@ -157,6 +159,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
     def _has_tool(self, name: str) -> bool:
         """Return whether a given tool name is available in this session."""
         return any(spec.get("name") == name for spec in get_tool_specs())
+
+    def _replace_sensor_state(self, state: dict[str, Any]) -> None:
+        """Replace sensor_state with a fresh snapshot (clear stale keys)."""
+        self.sensor_state.clear()
+        self.sensor_state.update(state)
 
     def _touch_activity(self) -> None:
         """Update the last activity timestamp."""
@@ -396,7 +403,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 ),
                 head_wobbler_reset=(self.deps.head_wobbler.reset if self.deps.head_wobbler is not None else None),
                 timeout_s=env_float("HEALTHY_TOOL_DISPATCH_TIMEOUT_S", 30.0, min_value=1.0),
-                on_sensor_update=lambda state: self.sensor_state.update(state),
+                on_sensor_update=self._replace_sensor_state,
             )
             self._dispatcher = dispatcher
 

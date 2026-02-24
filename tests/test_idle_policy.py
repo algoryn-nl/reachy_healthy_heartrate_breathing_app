@@ -96,6 +96,62 @@ class TestShouldTrigger:
         assert p.should_trigger(idle_duration=50.0, is_moving=False, now=100.0) is True
 
 
+class TestErrorTracking:
+    def test_record_error_increments_counter(self) -> None:
+        p = _policy()
+        assert p.consecutive_errors == 0
+        p.record_error(now=100.0)
+        assert p.consecutive_errors == 1
+        assert p.last_error_time == 100.0
+
+    def test_record_error_marks_suppressed_after_threshold(self) -> None:
+        p = _policy(errors_before_suppression=3)
+        for t in range(3):
+            p.record_error(now=100.0 + t)
+        assert p.consecutive_errors == 3
+        assert p.sensor_suppressed is True
+
+    def test_not_suppressed_below_threshold(self) -> None:
+        p = _policy(errors_before_suppression=3)
+        p.record_error(now=100.0)
+        p.record_error(now=101.0)
+        assert p.sensor_suppressed is False
+
+    def test_should_trigger_suppressed_during_backoff(self) -> None:
+        p = _policy(probe_interval_s=40.0, errors_before_suppression=2, error_backoff_s=60.0)
+        p.record_error(now=90.0)
+        p.record_error(now=95.0)
+        # now=100, last_error=95, backoff=60 -> 5s < 60s -> suppressed
+        assert p.should_trigger(idle_duration=50.0, is_moving=False, now=100.0) is False
+
+    def test_should_trigger_allowed_after_backoff_expires(self) -> None:
+        p = _policy(probe_interval_s=40.0, errors_before_suppression=2, error_backoff_s=60.0)
+        p.record_error(now=10.0)
+        p.record_error(now=15.0)
+        # now=100, last_error=15, backoff=60 -> 85s > 60s -> retry allowed
+        assert p.should_trigger(idle_duration=50.0, is_moving=False, now=100.0) is True
+
+    def test_record_target_found_resets_errors(self) -> None:
+        p = _policy(errors_before_suppression=2)
+        p.record_error(now=100.0)
+        p.record_error(now=101.0)
+        assert p.sensor_suppressed is True
+        p.record_target_found(now=200.0)
+        assert p.consecutive_errors == 0
+        assert p.last_error_time is None
+        assert p.sensor_suppressed is False
+
+    def test_record_no_target_resets_errors(self) -> None:
+        p = _policy(errors_before_suppression=2)
+        p.record_error(now=100.0)
+        p.record_error(now=101.0)
+        assert p.sensor_suppressed is True
+        p.record_no_target(sweep_was_used=False)
+        assert p.consecutive_errors == 0
+        assert p.last_error_time is None
+        assert p.sensor_suppressed is False
+
+
 class TestBuildStrategyMessage:
     def test_returns_nonempty_string(self) -> None:
         p = _policy(probe_duration_s=5.0)

@@ -83,9 +83,12 @@ function formatAge(epochSec) {
   return Math.floor(ageSec / 3600) + "h ago";
 }
 
+const STALE_THRESHOLD_S = 120; // seconds before data is considered stale
+
 function updateSensorUI(data) {
   const panel = document.getElementById("sensor-panel");
   const chip = document.getElementById("sensor-chip");
+  const errorBanner = document.getElementById("sensor-error");
   if (!panel) return;
 
   if (!data || !data.available) {
@@ -95,56 +98,83 @@ function updateSensorUI(data) {
 
   show(panel, true);
 
-  // Chip status
-  const deviceState = data.device_state || null;
-  if (deviceState === "RESTING_VITALS" || deviceState === "STILL_NEAR") {
-    chip.textContent = "Active";
-    chip.className = "chip chip-ok";
-  } else if (deviceState === "NO_TARGET") {
-    chip.textContent = "No Target";
-    chip.className = "chip";
-  } else if (deviceState) {
-    chip.textContent = "Sensing";
-    chip.className = "chip chip-active";
-  } else {
-    chip.textContent = "Waiting";
-    chip.className = "chip";
+  // Handle error / disconnected state
+  const isDisconnected = data.status === "disconnected";
+  const hasError = !!data.error;
+
+  if (errorBanner) {
+    if (hasError) {
+      errorBanner.textContent = isDisconnected ? "Sensor disconnected" : "Sensor error";
+      show(errorBanner, true);
+    } else {
+      show(errorBanner, false);
+    }
   }
+
+  // Stale data detection
+  const ageSec = data.updated_at ? Math.round((Date.now() / 1000) - data.updated_at) : null;
+  const isStale = ageSec != null && ageSec > STALE_THRESHOLD_S;
+
+  // Chip status
+  if (isDisconnected) {
+    chip.textContent = "Disconnected";
+    chip.className = "chip chip-error";
+  } else if (isStale) {
+    chip.textContent = "Stale";
+    chip.className = "chip chip-warn";
+  } else {
+    const deviceState = data.device_state || null;
+    if (deviceState === "RESTING_VITALS" || deviceState === "STILL_NEAR") {
+      chip.textContent = "Active";
+      chip.className = "chip chip-ok";
+    } else if (deviceState === "NO_TARGET") {
+      chip.textContent = "No Target";
+      chip.className = "chip";
+    } else if (deviceState) {
+      chip.textContent = "Sensing";
+      chip.className = "chip chip-active";
+    } else {
+      chip.textContent = "Waiting";
+      chip.className = "chip";
+    }
+  }
+
+  // When disconnected, show dashes for all readings but keep panel visible
+  const dash = isDisconnected;
 
   // Person state
   const stateEl = document.getElementById("s-device-state");
-  if (stateEl) stateEl.textContent = STATE_LABELS[deviceState] || deviceState || "--";
+  if (stateEl) stateEl.textContent = dash ? "--" : (STATE_LABELS[data.device_state] || data.device_state || "--");
 
   // Target count
   const countEl = document.getElementById("s-target-count");
   if (countEl) {
-    const count = data.target_count;
-    countEl.textContent = (count != null) ? String(count) : "--";
+    countEl.textContent = dash ? "--" : ((data.target_count != null) ? String(data.target_count) : "--");
   }
 
   // Truncation warning
   const truncEl = document.getElementById("s-truncated");
-  if (truncEl) show(truncEl, !!data.targets_truncated);
+  if (truncEl) show(truncEl, !dash && !!data.targets_truncated);
 
   // Heart rate
   const hrEl = document.getElementById("s-hr");
   if (hrEl) {
     const hr = data.heart_rate_bpm;
-    hrEl.textContent = (hr != null) ? hr.toFixed(1) : "--";
+    hrEl.textContent = dash ? "--" : ((hr != null) ? hr.toFixed(1) : "--");
   }
 
   // Breathing rate
   const brEl = document.getElementById("s-br");
   if (brEl) {
     const br = data.breath_rate_bpm;
-    brEl.textContent = (br != null) ? br.toFixed(1) : "--";
+    brEl.textContent = dash ? "--" : ((br != null) ? br.toFixed(1) : "--");
   }
 
   // Lux
   const luxEl = document.getElementById("s-lux");
   if (luxEl) {
     const lux = data.lux;
-    luxEl.textContent = (lux != null) ? lux.toFixed(0) : "--";
+    luxEl.textContent = dash ? "--" : ((lux != null) ? lux.toFixed(0) : "--");
   }
 
   // Mode / last updated
