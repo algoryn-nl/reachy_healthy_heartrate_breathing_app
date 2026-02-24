@@ -10,11 +10,11 @@
 
 - [ ] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch)
 - [x] Fix antenna blending race condition — false positive; only real issue was `get_status()` reading `_is_listening` off-thread, fixed to use `_shared_is_listening` (2026-02-24)
-- [ ] Fix session setup exception handling gap (openai_realtime.py:415-417)
+- [x] Fix session setup exception handling gap (openai_realtime.py:415-417) (2026-02-24)
 
 ### Upcoming — Medium Priority
 
-- [ ] Reset idle tool call flag on exception path (openai_realtime.py:538-583)
+- [x] Reset idle tool call flag on exception path (openai_realtime.py:538-583) (2026-02-24)
 - [x] Refactor tool registry to lazy init — no disk I/O or sys.exit at import time (2026-02-24)
 - [x] Validate tool loading matches tools.txt — warns on unregistered tool names (2026-02-24)
 - [x] Pin Gradio to stable version — `>=5.50.0` replaces dev pin (2026-02-24)
@@ -45,6 +45,9 @@
 - [x] Non-blocking tool dispatch with timeout, semaphore, and cancellation (2026-02-23)
 - [x] Verify lux extraction paths match mmWave output — confirmed correct, added regression tests (2026-02-24)
 - [x] Throttle light baseline saves with dirty flag + 60s interval, flush at shutdown (2026-02-24)
+- [x] Fix session setup exception handling gap — try/finally around event loop clears connection + connected_event (2026-02-24)
+- [x] Reset idle tool call flag on exception path in emit() (2026-02-24)
+- [x] Add receive() connection guard regression test (2026-02-24)
 
 ## Notes
 
