@@ -4,6 +4,7 @@ from typing import Any
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import numpy as np
 import pytest
 
 import healthy_heartrate_breathing.openai_realtime as rt_mod
@@ -360,3 +361,18 @@ async def test_connection_cleared_on_restart_failure(monkeypatch: Any) -> None:
     await asyncio.sleep(0.1)
 
     assert handler.connection is None, "connection must be cleaned up after restart failure"
+
+
+# ---- Receive guard tests ----
+
+
+@pytest.mark.asyncio
+async def test_receive_guards_closed_connection() -> None:
+    """receive() silently drops frames when connection is None."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = OpenaiRealtimeHandler(deps)
+    handler.connection = None
+
+    # Should not raise
+    frame = (24000, np.zeros(480, dtype=np.int16))
+    await handler.receive(frame)
