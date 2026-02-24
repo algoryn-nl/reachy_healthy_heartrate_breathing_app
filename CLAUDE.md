@@ -129,7 +129,7 @@ The project includes a custom hardware component under `hardware/`.
 ### Light Context System
 
 `light_context.py` is a policy tool that classifies ambient light conditions:
-- Auto-invoked after mmWave returns lux data (orchestrated in `openai_realtime.py:_run_light_context_from_mmwave`)
+- Auto-invoked after mmWave returns lux data (orchestrated by `LightOrchestrator` via `ToolDispatcher._run_tool()`)
 - Maintains per-user rolling lux baseline (EMA per hour-of-day, persisted to JSON)
 - Outputs context state, recommended conversation mode, and action suggestions
 - JSONL analytics logging

@@ -71,7 +71,13 @@ Calm periodic mmWave probing when the robot is idle:
 - Auto-discovery via subclass introspection (`get_concrete_subclasses(Tool)`)
 - Profile-driven loading: `tools.txt` lists enabled tools by name
 - Resolution order: profile folder, then `tools/` (core), then external directory
-- Dispatch: `dispatch_tool_call(name, args_json, deps)` looks up and calls the tool
+- Core dispatch: `dispatch_tool_call(name, args_json, deps)` looks up and calls the tool
+- **Non-blocking dispatch** via `ToolDispatcher` class:
+  - Fire-and-forget: `asyncio.create_task()` returns immediately to the event loop
+  - Serialisation: `Semaphore(1)` ensures at most one tool runs at a time
+  - Timeout: `asyncio.wait_for()` with configurable `HEALTHY_TOOL_DISPATCH_TIMEOUT_S` (default 30 s)
+  - Cancellation: `cancel()` method for session teardown
+  - Integrates idle policy (mmWave probe overrides) and auto light-context orchestration
 - External tools/profiles via `REACHY_MINI_EXTERNAL_*_DIRECTORY` env vars with collision detection
 
 Current profile tools: `dance`, `stop_dance`, `play_emotion`, `stop_emotion`, `mmWave`, `light_context`, `sweep_look`.
