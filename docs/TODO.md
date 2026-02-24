@@ -27,7 +27,7 @@
 - [ ] Use `decimal.Decimal` for cost tracking (openai_realtime.py:43-55)
 - [ ] Extract magic numbers in moves.py to named constants (lines 266-282)
 - [ ] Remove dead commented-out code in HeadWobbler (head_wobbler.py:149-157)
-- [ ] Document IdlePolicy state transitions with state diagram
+- [x] Document IdlePolicy state transitions with state diagram — full state diagram, transition table, and parameter reference in `idle_policy.py` module docstring; summary in README.md and CLAUDE.md (2026-02-24)
 - [x] Surface unused BIO state field and targets truncation flag (mmWave.py) — `device_state`, `max_target_count`, `targets_truncated` surfaced in scan/measure results; sensor dashboard added to headless UI with `/sensor` REST endpoint (2026-02-24)
 
 ### Done
