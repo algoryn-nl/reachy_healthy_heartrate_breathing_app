@@ -781,7 +781,7 @@ class MovementManager:
 
         return {
             "queue_size": len(self.move_queue),
-            "is_listening": self._is_listening,
+            "is_listening": self._shared_is_listening,
             "breathing_active": self._breathing_active,
             "last_commanded_pose": {
                 "head": head_matrix,

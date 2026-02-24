@@ -9,7 +9,7 @@
 ### Upcoming — High Priority
 
 - [ ] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch)
-- [ ] Fix race condition in antenna blending (moves.py:599-633)
+- [x] Fix antenna blending race condition — false positive; only real issue was `get_status()` reading `_is_listening` off-thread, fixed to use `_shared_is_listening` (2026-02-24)
 - [ ] Fix session setup exception handling gap (openai_realtime.py:415-417)
 
 ### Upcoming — Medium Priority
