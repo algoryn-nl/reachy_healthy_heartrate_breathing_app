@@ -32,10 +32,10 @@ The mmWave tool communicates with custom firmware on an Arduino-connected mmWave
 
 **What it returns:**
 
-- **Targets**: Cluster ID, x/y position, range (m), bearing, velocity
+- **Targets**: Cluster ID, x/y position, range (m), bearing, velocity; `max_target_count` and `targets_truncated` flag (set when >8 targets exceed the wire cap)
 - **Bio**: Heart rate (bpm), breathing rate (bpm), validity flags
 - **Light**: Ambient lux readings collected throughout the session
-- **State**: Firmware state transitions
+- **Device State**: Firmware person state (`NO_TARGET`, `MULTI_TARGET`, `PRESENT_FAR`, `MOVING`, `STILL_NEAR`, `RESTING_VITALS`) surfaced as `device_state` in scan/measure results
 
 The tool picks the closest valid target during scan and automatically focuses the radar on that cluster for bio measurement. An optional sweep mode rotates the robot head left-center-right to widen the scan field.
 
@@ -132,7 +132,7 @@ src/healthy_heartrate_breathing/
   openai_realtime.py        -- WebSocket lifecycle, reconnection, session orchestration
   audio_router.py           -- mic/speaker frame routing (resample, emit audio deltas)
   idle_policy.py            -- idle detection state machine, mmWave probe scheduling
-  tool_dispatcher.py        -- non-blocking tool dispatch with timeout and serialisation
+  tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, and sensor state extraction
   transcript_handler.py     -- conversation transcript capture and formatting
   light_orchestrator.py     -- auto-invokes light context after mmWave lux data
   tools/
@@ -157,4 +157,4 @@ Use the `src/healthy_heartrate_breathing/profiles/_healthy_heartrate_breathing_l
 
 Also customize:
 - `index.html` -- Hugging Face Spaces landing page
-- `src/healthy_heartrate_breathing/static/index.html` -- web app parameters page
+- `src/healthy_heartrate_breathing/static/index.html` -- web app settings page with sensor dashboard (headless mode)

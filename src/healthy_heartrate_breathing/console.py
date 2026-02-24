@@ -309,6 +309,14 @@ class LocalStream:
                 logger.warning(f"API key validation failed: {e}")
                 return JSONResponse({"valid": False, "error": "validation_error"}, status_code=500)
 
+        # GET /sensor -> latest mmWave sensor readings for dashboard
+        @self._settings_app.get("/sensor")
+        def _sensor() -> JSONResponse:
+            data = getattr(self.handler, "sensor_state", None)
+            if not data:
+                return JSONResponse({"available": False})
+            return JSONResponse({"available": True, **data})
+
         self._settings_initialized = True
 
     def launch(self) -> None:
@@ -351,6 +359,7 @@ class LocalStream:
             logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
             try:
                 from gradio_client import Client
+
                 client = Client("HuggingFaceM4/gradium_setup", verbose=False)
                 key, status = client.predict(api_name="/claim_b_key")
                 if key and key.strip():
@@ -447,7 +456,10 @@ class LocalStream:
         if self._robot.media.backend == MediaBackend.GSTREAMER:
             # Directly flush gstreamer audio pipe
             self._robot.media.audio.clear_player()
-        elif self._robot.media.backend == MediaBackend.DEFAULT or self._robot.media.backend == MediaBackend.DEFAULT_NO_VIDEO:
+        elif (
+            self._robot.media.backend == MediaBackend.DEFAULT
+            or self._robot.media.backend == MediaBackend.DEFAULT_NO_VIDEO
+        ):
             self._robot.media.audio.clear_output_buffer()
         self.handler.output_queue = asyncio.Queue()
 
