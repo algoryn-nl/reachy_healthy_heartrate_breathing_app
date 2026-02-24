@@ -17,9 +17,9 @@
 - [ ] Reset idle tool call flag on exception path (openai_realtime.py:538-583)
 - [x] Refactor tool registry to lazy init — no disk I/O or sys.exit at import time (2026-02-24)
 - [x] Validate tool loading matches tools.txt — warns on unregistered tool names (2026-02-24)
-- [ ] Pin Gradio to stable version (pyproject.toml)
-- [ ] Add mypy coverage for tests/ (pyproject.toml)
-- [ ] Resolve Python version mismatch: requires-python >=3.10 vs mypy target 3.12
+- [x] Pin Gradio to stable version — `>=5.50.0` replaces dev pin (2026-02-24)
+- [x] Add mypy coverage for tests/ (2026-02-24)
+- [x] Align requires-python to `>=3.12` matching mypy target and actual runtime (2026-02-24)
 
 ### Upcoming — Low Priority
 
