@@ -537,6 +537,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             try:
                 await self.send_idle_signal(idle_duration)
             except Exception as e:
+                self.is_idle_tool_call = False
                 logger.warning("Idle signal skipped (connection closed?): %s", e)
                 return None
 

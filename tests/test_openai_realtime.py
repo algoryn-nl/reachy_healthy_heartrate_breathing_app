@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Any
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -171,3 +171,56 @@ def test_compute_response_cost(usage_kwargs: dict[str, Any], expect_positive: bo
         assert cost > 0
     else:
         assert cost == 0.0
+
+
+# ---- Idle flag reset tests ----
+
+
+@pytest.mark.asyncio
+async def test_idle_flag_reset_on_send_idle_signal_exception(monkeypatch: Any) -> None:
+    """is_idle_tool_call must be reset when send_idle_signal raises."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = OpenaiRealtimeHandler(deps)
+
+    # Force idle conditions: long idle duration, not moving
+    handler.last_activity_time = 0.0
+    handler.start_time = 0.0
+    deps.movement_manager.is_idle.return_value = True
+
+    # Make send_idle_signal set flag (as the real method does) then raise
+    async def _raise(*_a: Any, **_kw: Any) -> None:
+        handler.is_idle_tool_call = True
+        raise ConnectionError("simulated disconnect")
+
+    monkeypatch.setattr(handler, "send_idle_signal", _raise)
+
+    # Stub _has_tool to return False (no mmWave -> uses simple idle_interval)
+    monkeypatch.setattr(handler, "_has_tool", lambda _name: False)
+
+    # Stub wait_for_item so it doesn't block
+    monkeypatch.setattr(rt_mod, "wait_for_item", AsyncMock(return_value=None))
+
+    result = await handler.emit()
+
+    assert result is None
+    assert handler.is_idle_tool_call is False, "Flag must be reset after exception"
+
+
+@pytest.mark.asyncio
+async def test_emit_returns_none_when_idle_signal_fails(monkeypatch: Any) -> None:
+    """emit() returns None (not crash) when send_idle_signal fails."""
+    deps = ToolDependencies(reachy_mini=MagicMock(), movement_manager=MagicMock())
+    handler = OpenaiRealtimeHandler(deps)
+
+    handler.last_activity_time = 0.0
+    deps.movement_manager.is_idle.return_value = True
+    monkeypatch.setattr(handler, "_has_tool", lambda _name: False)
+    monkeypatch.setattr(rt_mod, "wait_for_item", AsyncMock(return_value=None))
+
+    async def _raise(*_a: Any, **_kw: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(handler, "send_idle_signal", _raise)
+
+    result = await handler.emit()
+    assert result is None
