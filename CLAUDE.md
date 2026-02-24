@@ -130,7 +130,7 @@ The project includes a custom hardware component under `hardware/`.
 
 `light_context.py` is a policy tool that classifies ambient light conditions:
 - Auto-invoked after mmWave returns lux data (orchestrated by `LightOrchestrator` via `ToolDispatcher._run_tool()`)
-- Maintains per-user rolling lux baseline (EMA per hour-of-day, persisted to JSON)
+- Maintains per-user rolling lux baseline (EMA per hour-of-day, persisted to JSON; stale entries pruned on load after `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS`, default 90)
 - Outputs context state, recommended conversation mode, and action suggestions
 - JSONL analytics logging
 
