@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Any
+from decimal import Decimal
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -189,10 +190,11 @@ def test_compute_response_cost(usage_kwargs: dict[str, Any], expect_positive: bo
     """Verify _compute_response_cost handles various token combinations without crashing."""
     usage = _make_usage(**usage_kwargs)
     cost = _compute_response_cost(usage)
+    assert isinstance(cost, Decimal), "cost must be Decimal for precision"
     if expect_positive:
         assert cost > 0
     else:
-        assert cost == 0.0
+        assert cost == Decimal(0)
 
 
 # ---- Idle flag reset tests ----
