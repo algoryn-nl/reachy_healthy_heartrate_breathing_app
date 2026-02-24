@@ -16,7 +16,6 @@
 
 - [ ] Reset idle tool call flag on exception path (openai_realtime.py:538-583)
 - [ ] Batch light baseline saves with timer-based flush (light_orchestrator.py:156)
-- [ ] Fix lux extraction path inconsistency (env_utils.py:161-185)
 - [ ] Refactor tool registry to avoid global side effects at import (core_tools.py:286)
 - [ ] Validate tool loading matches tools.txt expectations (core_tools.py:143-264)
 - [ ] Pin Gradio to stable version (pyproject.toml)
@@ -45,6 +44,7 @@
 - [x] Consolidate duplicated utility functions into env_utils.py (2026-02-23)
 - [x] Add mmWave env tuning defaults (2026-02-23)
 - [x] Non-blocking tool dispatch with timeout, semaphore, and cancellation (2026-02-23)
+- [x] Verify lux extraction paths match mmWave output — confirmed correct, added regression tests (2026-02-24)
 
 ## Notes
 
@@ -53,6 +53,7 @@
 - handleDecodedPacket() buffer validation already sufficient: exact length check + per-command payload validation (2026-02-23)
 - Locked profile pattern: app always uses `_healthy_heartrate_breathing_locked_profile` (2026-02-23)
 - IdlePolicy + LightOrchestrator extracted as first phase of handler decomposition (2026-02-23)
+- Lux extraction paths in env_utils.py verified against mmWave output: all 4 paths (measure/scan x latest_light/light_summary) match (2026-02-24)
 - COBS + CRC-16 binary protocol chosen for mmWave: compact, checksummed, no framing ambiguity
 
 ### Technical Debt
