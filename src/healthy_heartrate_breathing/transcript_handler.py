@@ -34,9 +34,7 @@ class TranscriptHandler:
 
         await self._cancel_debounce_task()
 
-        self._partial_task = asyncio.create_task(
-            self._emit_debounced(transcript, current_seq)
-        )
+        self._partial_task = asyncio.create_task(self._emit_debounced(transcript, current_seq))
 
     async def on_user_completed(self, transcript: str) -> None:
         """Handle a completed user transcript, cancelling any pending partial."""
@@ -56,9 +54,7 @@ class TranscriptHandler:
         try:
             await asyncio.sleep(self.debounce_delay)
             if self._partial_sequence == sequence:
-                await self._enqueue_output(
-                    {"role": "user_partial", "content": transcript}
-                )
+                await self._enqueue_output({"role": "user_partial", "content": transcript})
                 logger.debug("Debounced partial emitted: %s", transcript)
         except asyncio.CancelledError:
             logger.debug("Debounced partial cancelled")

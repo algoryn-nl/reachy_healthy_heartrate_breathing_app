@@ -23,9 +23,7 @@ def _reload_core_tools() -> ModuleType:
     return core_tools_mod
 
 
-def test_external_profile_can_use_builtin_tools(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_external_profile_can_use_builtin_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """External profile tools.txt can reference built-in src tools."""
     profile_name = "ext_profile_test"
     external_profiles_root = tmp_path / "external_profiles"
@@ -58,12 +56,12 @@ def test_external_tools_can_be_loaded_without_external_profile(
                 "from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies",
                 "",
                 "class ExtPingTool(Tool):",
-                "    name = \"ext_ping\"",
-                "    description = \"External ping tool\"",
-                "    parameters_schema = {\"type\": \"object\", \"properties\": {}, \"required\": []}",
+                '    name = "ext_ping"',
+                '    description = "External ping tool"',
+                '    parameters_schema = {"type": "object", "properties": {}, "required": []}',
                 "",
                 "    async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:",
-                "        return {\"status\": \"ok\"}",
+                '        return {"status": "ok"}',
                 "",
             ]
         ),

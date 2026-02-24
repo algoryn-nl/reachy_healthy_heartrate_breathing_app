@@ -48,7 +48,6 @@ def _get_env_disabled_tools() -> set[str]:
     return {name.strip() for name in raw.split(",") if name.strip()}
 
 
-
 def get_concrete_subclasses(base: type[Tool]) -> List[type[Tool]]:
     """Recursively find all concrete (non-abstract) subclasses of a base class."""
     result: List[type[Tool]] = []
