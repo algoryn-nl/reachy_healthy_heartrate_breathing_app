@@ -57,6 +57,26 @@ logger = logging.getLogger(__name__)
 # Configuration constants
 CONTROL_LOOP_FREQUENCY_HZ = 100.0  # Hz - Target frequency for the movement control loop
 
+# Idle breathing kicks in after this delay (seconds) of no activity.
+# 0.3 s is short enough to feel responsive (robot starts breathing almost
+# immediately after speech/move ends) yet long enough to avoid flicker when
+# moves fire in quick succession.
+IDLE_INACTIVITY_DELAY_S = 0.3
+
+# Duration (seconds) over which frozen antenna positions blend back to the
+# target after listening mode is turned off.  0.4 s produces a smooth,
+# natural-looking return without a visible snap.
+ANTENNA_BLEND_DURATION_S = 0.4
+
+# Minimum interval (seconds) between listening-mode toggles.  Guards against
+# rapid on/off chatter from the audio pipeline causing visible antenna jitter.
+LISTENING_DEBOUNCE_S = 0.15
+
+# Minimum interval (seconds) between `set_target` error log messages.
+# Prevents log flooding when the robot connection is temporarily unhealthy
+# while still surfacing the first occurrence immediately.
+SET_TARGET_ERR_LOG_INTERVAL_S = 1.0
+
 # Type definitions
 FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
 
@@ -265,7 +285,7 @@ class MovementManager:
         self.move_queue: deque[Move] = deque()
 
         # Configuration
-        self.idle_inactivity_delay = 0.3  # seconds
+        self.idle_inactivity_delay = IDLE_INACTIVITY_DELAY_S
         self.target_frequency = CONTROL_LOOP_FREQUENCY_HZ
         self.target_period = 1.0 / self.target_frequency
 
@@ -275,13 +295,13 @@ class MovementManager:
         self._last_commanded_pose: FullBodyPose = clone_full_body_pose(self.state.last_primary_pose)
         self._listening_antennas: Tuple[float, float] = self._last_commanded_pose[1]
         self._antenna_unfreeze_blend = 1.0
-        self._antenna_blend_duration = 0.4  # seconds to blend back after listening
+        self._antenna_blend_duration = ANTENNA_BLEND_DURATION_S
         self._last_listening_blend_time = self._now()
         self._breathing_active = False  # true when breathing move is running or queued
-        self._listening_debounce_s = 0.15
+        self._listening_debounce_s = LISTENING_DEBOUNCE_S
         self._last_listening_toggle_time = self._now()
         self._last_set_target_err = 0.0
-        self._set_target_err_interval = 1.0  # seconds between error logs
+        self._set_target_err_interval = SET_TARGET_ERR_LOG_INTERVAL_S
         self._set_target_err_suppressed = 0
 
         # Cross-thread signalling
