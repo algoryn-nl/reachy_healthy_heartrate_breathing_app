@@ -203,8 +203,76 @@ button.ghost:hover { border-color: rgba(94, 240, 193, 0.4); }
 .status.warn { color: var(--warn); }
 .status.error { color: var(--error); }
 
+/* Sensor dashboard */
+.sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+.sensor-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  min-height: 80px;
+}
+.sensor-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.sensor-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.sensor-value-lg {
+  font-size: 28px;
+  letter-spacing: -0.5px;
+}
+.sensor-value-sm {
+  font-size: 14px;
+}
+.sensor-unit {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.sensor-ts {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.sensor-warn {
+  font-size: 10px;
+  color: var(--warn);
+  background: rgba(255, 181, 71, 0.12);
+  border: 1px solid rgba(255, 181, 71, 0.3);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-top: 4px;
+}
+.chip-warn {
+  background: rgba(255, 181, 71, 0.15);
+  color: var(--warn);
+  border-color: rgba(255, 181, 71, 0.4);
+}
+.chip-active {
+  background: rgba(69, 196, 255, 0.15);
+  color: var(--accent);
+  border-color: rgba(69, 196, 255, 0.4);
+}
+
 @media (max-width: 760px) {
   .hero h1 { font-size: 26px; }
   button { width: 100%; justify-content: center; }
   .actions { flex-direction: column; align-items: flex-start; }
+  .sensor-grid { grid-template-columns: repeat(2, 1fr); }
 }

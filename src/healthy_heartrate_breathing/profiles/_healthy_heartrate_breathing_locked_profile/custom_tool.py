@@ -5,6 +5,7 @@ from typing import Any
 
 from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
 
+
 logger = logging.getLogger(__name__)
 
 

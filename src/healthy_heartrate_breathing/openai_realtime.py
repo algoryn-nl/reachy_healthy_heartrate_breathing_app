@@ -95,6 +95,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Cost tracking
         self.cumulative_cost: float = 0.0
 
+        # Latest sensor readings (updated after each mmWave tool call, polled by /sensor endpoint)
+        self.sensor_state: dict[str, Any] = {}
+
         # Idle scanning policy (delegates to IdlePolicy)
         from healthy_heartrate_breathing.idle_policy import IdlePolicy
 
@@ -386,27 +389,18 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 create_message=_create_message,
                 enqueue_output=_enqueue_output,
                 get_camera_frame=lambda: (
-                    self.deps.camera_worker.get_latest_frame()
-                    if self.deps.camera_worker is not None
-                    else None
+                    self.deps.camera_worker.get_latest_frame() if self.deps.camera_worker is not None else None
                 ),
-                head_wobbler_reset=(
-                    self.deps.head_wobbler.reset
-                    if self.deps.head_wobbler is not None
-                    else None
-                ),
+                head_wobbler_reset=(self.deps.head_wobbler.reset if self.deps.head_wobbler is not None else None),
                 timeout_s=env_float("HEALTHY_TOOL_DISPATCH_TIMEOUT_S", 30.0, min_value=1.0),
+                on_sensor_update=lambda state: self.sensor_state.update(state),
             )
             self._dispatcher = dispatcher
 
             audio = AudioRouter(
                 output_sample_rate=self.output_sample_rate,
                 enqueue_audio=_enqueue_audio,
-                feed_head_wobbler=(
-                    self.deps.head_wobbler.feed
-                    if self.deps.head_wobbler is not None
-                    else None
-                ),
+                feed_head_wobbler=(self.deps.head_wobbler.feed if self.deps.head_wobbler is not None else None),
                 on_activity=self._touch_activity,
             )
 

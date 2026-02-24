@@ -281,9 +281,18 @@ def decode_event(msg_type: int, payload: bytes) -> dict[str, Any]:
         target_len = 12
         if len(payload) < header_len:
             raise ProtocolError("bad targets payload length")
-        t_ms, forced_focus, focus_cluster, focus_x_mm, focus_y_mm, focus_r_mm, focus_bearing_cdeg, focus_v_x10, flags, n_targets = struct.unpack(
-            "<IhhhhHhhBB", payload[:header_len]
-        )
+        (
+            t_ms,
+            forced_focus,
+            focus_cluster,
+            focus_x_mm,
+            focus_y_mm,
+            focus_r_mm,
+            focus_bearing_cdeg,
+            focus_v_x10,
+            flags,
+            n_targets,
+        ) = struct.unpack("<IhhhhHhhBB", payload[:header_len])
         expected_len = header_len + int(n_targets) * target_len
         if len(payload) != expected_len:
             raise ProtocolError("targets payload length mismatch")
@@ -302,7 +311,9 @@ def decode_event(msg_type: int, payload: bytes) -> dict[str, Any]:
         targets = []
         offset = header_len
         for _ in range(int(n_targets)):
-            cluster, x_mm, y_mm, r_mm, bearing_cdeg, v_x10 = struct.unpack("<hhhHhh", payload[offset : offset + target_len])
+            cluster, x_mm, y_mm, r_mm, bearing_cdeg, v_x10 = struct.unpack(
+                "<hhhHhh", payload[offset : offset + target_len]
+            )
             offset += target_len
             targets.append(
                 {

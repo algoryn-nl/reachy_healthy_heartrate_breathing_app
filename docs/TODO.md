@@ -28,7 +28,7 @@
 - [ ] Extract magic numbers in moves.py to named constants (lines 266-282)
 - [ ] Remove dead commented-out code in HeadWobbler (head_wobbler.py:149-157)
 - [ ] Document IdlePolicy state transitions with state diagram
-- [ ] Surface unused BIO state field and targets truncation flag (mmWave.py)
+- [x] Surface unused BIO state field and targets truncation flag (mmWave.py) — `device_state`, `max_target_count`, `targets_truncated` surfaced in scan/measure results; sensor dashboard added to headless UI with `/sensor` REST endpoint (2026-02-24)
 
 ### Done
 

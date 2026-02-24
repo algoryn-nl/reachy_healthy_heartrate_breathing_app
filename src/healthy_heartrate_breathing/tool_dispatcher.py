@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 import json
+import time
 import asyncio
 import logging
-from typing import Any, Callable, Awaitable
+from typing import Any, Callable, Optional, Awaitable
 
 import numpy as np
 
@@ -13,6 +14,49 @@ from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
 
 
 logger = logging.getLogger(__name__)
+
+
+def extract_sensor_state(mmwave_result: dict[str, Any]) -> dict[str, Any]:
+    """Extract a flat sensor-state snapshot from an mmWave tool result."""
+    state: dict[str, Any] = {"updated_at": time.time()}
+
+    scan = mmwave_result.get("scan")
+    measure = mmwave_result.get("measure")
+
+    # Targets info from scan
+    if isinstance(scan, dict):
+        state["device_state"] = scan.get("device_state")
+        state["target_count"] = scan.get("max_target_count", 0)
+        state["targets_truncated"] = bool(scan.get("targets_truncated", False))
+        latest = scan.get("latest_target")
+        if isinstance(latest, dict):
+            state["closest_target_r"] = latest.get("r")
+            state["closest_target_bearing"] = latest.get("bearing")
+        light_summary = scan.get("light_summary")
+        if isinstance(light_summary, dict):
+            state["lux"] = light_summary.get("latest_lux")
+
+    # Bio info from measure
+    if isinstance(measure, dict):
+        if measure.get("device_state") is not None:
+            state["device_state"] = measure.get("device_state")
+        valid_bio = measure.get("valid_bio")
+        if isinstance(valid_bio, dict):
+            state["heart_rate_bpm"] = valid_bio.get("heart_rate_bpm")
+            state["breath_rate_bpm"] = valid_bio.get("breath_rate_bpm")
+        light_summary = measure.get("light_summary")
+        if isinstance(light_summary, dict) and light_summary.get("latest_lux") is not None:
+            state["lux"] = light_summary.get("latest_lux")
+
+    # Light context (if auto-invoked)
+    lc = mmwave_result.get("light_context")
+    if isinstance(lc, dict):
+        state["light_context_state"] = lc.get("context_state")
+
+    state["mode"] = mmwave_result.get("mode")
+    state["status"] = mmwave_result.get("status")
+
+    return state
 
 
 def _short_text(value: Any, limit: int = 220) -> str:
@@ -94,6 +138,7 @@ class ToolDispatcher:
         get_camera_frame: Callable[[], np.ndarray | None],
         head_wobbler_reset: Callable[[], None] | None,
         timeout_s: float = 30.0,
+        on_sensor_update: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> None:
         self._idle_policy = idle_policy
         self._light_orchestrator = light_orchestrator
@@ -106,6 +151,7 @@ class ToolDispatcher:
         self._get_camera_frame = get_camera_frame
         self._head_wobbler_reset = head_wobbler_reset
         self._timeout_s = timeout_s
+        self._on_sensor_update = on_sensor_update
         self._semaphore = asyncio.Semaphore(1)
         self._active_task: asyncio.Task[None] | None = None
 
@@ -184,10 +230,7 @@ class ToolDispatcher:
         if is_idle and self._has_tool("mmWave") and tool_name != "mmWave":
             tool_result = {
                 "status": "skipped",
-                "reason": (
-                    f"idle tool '{tool_name}' suppressed; "
-                    "using passive mmWave idle policy"
-                ),
+                "reason": (f"idle tool '{tool_name}' suppressed; using passive mmWave idle policy"),
             }
             logger.info("Idle policy suppressed tool: %s", tool_name)
         else:
@@ -261,6 +304,14 @@ class ToolDispatcher:
                     )
             except Exception as e:
                 logger.warning("Auto light_context failed after mmWave: %s", e)
+
+        # Update sensor state for dashboard polling
+        if tool_name == "mmWave" and isinstance(tool_result, dict) and not tool_result.get("error"):
+            try:
+                if self._on_sensor_update is not None:
+                    self._on_sensor_update(extract_sensor_state(tool_result))
+            except Exception:
+                logger.debug("Sensor state update failed", exc_info=True)
 
         # Send tool result back to connection
         if isinstance(call_id, str):

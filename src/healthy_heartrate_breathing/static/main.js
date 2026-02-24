@@ -23,7 +23,7 @@ async function waitForStatus(timeoutMs = 15000) {
       if (resp.ok) return await resp.json();
     } catch (e) {}
     if (loadingText) {
-      loadingText.textContent = attempts > 8 ? "Starting backend…" : "Loading…";
+      loadingText.textContent = attempts > 8 ? "Starting backend\u2026" : "Loading\u2026";
     }
     if (Date.now() >= deadline) return null;
     await sleep(500);
@@ -62,6 +62,118 @@ function show(el, flag) {
   el.classList.toggle("hidden", !flag);
 }
 
+/* ---- Sensor Dashboard ---- */
+
+const SENSOR_POLL_MS = 3000;
+const STATE_LABELS = {
+  NO_TARGET: "No Target",
+  MULTI_TARGET: "Multi-Target",
+  PRESENT_FAR: "Present (Far)",
+  MOVING: "Moving",
+  STILL_NEAR: "Still (Near)",
+  RESTING_VITALS: "Resting",
+};
+
+function formatAge(epochSec) {
+  if (!epochSec) return "--";
+  const ageSec = Math.round((Date.now() / 1000) - epochSec);
+  if (ageSec < 5) return "just now";
+  if (ageSec < 60) return ageSec + "s ago";
+  if (ageSec < 3600) return Math.floor(ageSec / 60) + "m ago";
+  return Math.floor(ageSec / 3600) + "h ago";
+}
+
+function updateSensorUI(data) {
+  const panel = document.getElementById("sensor-panel");
+  const chip = document.getElementById("sensor-chip");
+  if (!panel) return;
+
+  if (!data || !data.available) {
+    show(panel, false);
+    return;
+  }
+
+  show(panel, true);
+
+  // Chip status
+  const deviceState = data.device_state || null;
+  if (deviceState === "RESTING_VITALS" || deviceState === "STILL_NEAR") {
+    chip.textContent = "Active";
+    chip.className = "chip chip-ok";
+  } else if (deviceState === "NO_TARGET") {
+    chip.textContent = "No Target";
+    chip.className = "chip";
+  } else if (deviceState) {
+    chip.textContent = "Sensing";
+    chip.className = "chip chip-active";
+  } else {
+    chip.textContent = "Waiting";
+    chip.className = "chip";
+  }
+
+  // Person state
+  const stateEl = document.getElementById("s-device-state");
+  if (stateEl) stateEl.textContent = STATE_LABELS[deviceState] || deviceState || "--";
+
+  // Target count
+  const countEl = document.getElementById("s-target-count");
+  if (countEl) {
+    const count = data.target_count;
+    countEl.textContent = (count != null) ? String(count) : "--";
+  }
+
+  // Truncation warning
+  const truncEl = document.getElementById("s-truncated");
+  if (truncEl) show(truncEl, !!data.targets_truncated);
+
+  // Heart rate
+  const hrEl = document.getElementById("s-hr");
+  if (hrEl) {
+    const hr = data.heart_rate_bpm;
+    hrEl.textContent = (hr != null) ? hr.toFixed(1) : "--";
+  }
+
+  // Breathing rate
+  const brEl = document.getElementById("s-br");
+  if (brEl) {
+    const br = data.breath_rate_bpm;
+    brEl.textContent = (br != null) ? br.toFixed(1) : "--";
+  }
+
+  // Lux
+  const luxEl = document.getElementById("s-lux");
+  if (luxEl) {
+    const lux = data.lux;
+    luxEl.textContent = (lux != null) ? lux.toFixed(0) : "--";
+  }
+
+  // Mode / last updated
+  const modeEl = document.getElementById("s-mode");
+  if (modeEl) modeEl.textContent = data.mode || "--";
+
+  const tsEl = document.getElementById("s-updated");
+  if (tsEl) tsEl.textContent = formatAge(data.updated_at);
+}
+
+async function pollSensor() {
+  try {
+    const resp = await fetchWithTimeout("/sensor", {}, 2000);
+    if (resp.ok) {
+      const data = await resp.json();
+      updateSensorUI(data);
+    }
+  } catch (e) {
+    // silently ignore fetch errors
+  }
+}
+
+function startSensorPolling() {
+  pollSensor();
+  setInterval(pollSensor, SENSOR_POLL_MS);
+}
+
+/* ---- Init ---- */
+
 async function init() {
   const loading = document.getElementById("loading");
   const statusEl = document.getElementById("status");
@@ -83,6 +195,9 @@ async function init() {
     show(formPanel, true);
   }
   show(loading, false);
+
+  // Start sensor dashboard polling
+  startSensorPolling();
 
   changeKeyBtn.addEventListener("click", () => {
     show(configuredPanel, false);
@@ -118,7 +233,7 @@ async function init() {
       statusEl.textContent = "Key valid! Saving...";
       statusEl.className = "status ok";
       await saveKey(key);
-      statusEl.textContent = "Saved. Reloading…";
+      statusEl.textContent = "Saved. Reloading\u2026";
       statusEl.className = "status ok";
       window.location.reload();
     } catch (e) {

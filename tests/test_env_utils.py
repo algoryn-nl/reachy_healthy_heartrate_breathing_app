@@ -162,12 +162,15 @@ def test_extract_lux_from_mmwave_result():
     assert extract_lux_from_mmwave_result({"measure": {"light_summary": {"latest_lux": 99}}}) == 99.0
 
     # measure preferred over scan when both present
-    assert extract_lux_from_mmwave_result(
-        {
-            "measure": {"latest_light": {"lux": 50.0}},
-            "scan": {"latest_light": {"lux": 30.0}},
-        }
-    ) == 50.0
+    assert (
+        extract_lux_from_mmwave_result(
+            {
+                "measure": {"latest_light": {"lux": 50.0}},
+                "scan": {"latest_light": {"lux": 30.0}},
+            }
+        )
+        == 50.0
+    )
 
     # missing
     assert extract_lux_from_mmwave_result({}) is None
@@ -175,9 +178,12 @@ def test_extract_lux_from_mmwave_result():
     assert extract_lux_from_mmwave_result({"measure": {}}) is None
 
     # latest_light present but lux is None — should fall through to summary
-    assert extract_lux_from_mmwave_result(
-        {"scan": {"latest_light": {"lux": None}, "light_summary": {"latest_lux": 22.0}}}
-    ) == 22.0
+    assert (
+        extract_lux_from_mmwave_result(
+            {"scan": {"latest_light": {"lux": None}, "light_summary": {"latest_lux": 22.0}}}
+        )
+        == 22.0
+    )
 
 
 def test_extract_lux_realistic_locate_and_measure():
@@ -196,7 +202,14 @@ def test_extract_lux_realistic_locate_and_measure():
             "light_samples": [{"t_ms": 1000, "lux": 180.0}, {"t_ms": 4200, "lux": 185.3}],
             "state": "STILL_NEAR",
             "telemetry": [],
-            "light_summary": {"samples": 2, "valid_samples": 2, "latest_lux": 185.3, "avg_lux": 182.65, "min_lux": 180.0, "max_lux": 185.3},
+            "light_summary": {
+                "samples": 2,
+                "valid_samples": 2,
+                "latest_lux": 185.3,
+                "avg_lux": 182.65,
+                "min_lux": 180.0,
+                "max_lux": 185.3,
+            },
         },
         "measure": {
             "attempts": 5,
@@ -207,7 +220,14 @@ def test_extract_lux_realistic_locate_and_measure():
             "bio_messages": [],
             "valid_bio": {"heart_rate_bpm": 72, "breath_rate_bpm": 16, "state": 5, "hr_new": 1, "br_new": 1},
             "success": True,
-            "light_summary": {"samples": 2, "valid_samples": 2, "latest_lux": 190.7, "avg_lux": 189.35, "min_lux": 188.0, "max_lux": 190.7},
+            "light_summary": {
+                "samples": 2,
+                "valid_samples": 2,
+                "latest_lux": 190.7,
+                "avg_lux": 189.35,
+                "min_lux": 188.0,
+                "max_lux": 190.7,
+            },
         },
     }
 
@@ -231,7 +251,14 @@ def test_extract_lux_realistic_scan_only():
             "light_samples": [{"t_ms": 3000, "lux": 40.5}, {"t_ms": 7800, "lux": 42.1}],
             "state": "NO_TARGET",
             "telemetry": [],
-            "light_summary": {"samples": 2, "valid_samples": 2, "latest_lux": 42.1, "avg_lux": 41.3, "min_lux": 40.5, "max_lux": 42.1},
+            "light_summary": {
+                "samples": 2,
+                "valid_samples": 2,
+                "latest_lux": 42.1,
+                "avg_lux": 41.3,
+                "min_lux": 40.5,
+                "max_lux": 42.1,
+            },
         },
     }
 
@@ -255,7 +282,14 @@ def test_extract_lux_realistic_no_light_sensor():
             "light_samples": [],
             "state": "MOVING",
             "telemetry": [],
-            "light_summary": {"samples": 0, "valid_samples": 0, "latest_lux": None, "avg_lux": None, "min_lux": None, "max_lux": None},
+            "light_summary": {
+                "samples": 0,
+                "valid_samples": 0,
+                "latest_lux": None,
+                "avg_lux": None,
+                "min_lux": None,
+                "max_lux": None,
+            },
         },
         "measure": {
             "attempts": 3,
@@ -266,7 +300,14 @@ def test_extract_lux_realistic_no_light_sensor():
             "bio_messages": [],
             "valid_bio": None,
             "success": False,
-            "light_summary": {"samples": 0, "valid_samples": 0, "latest_lux": None, "avg_lux": None, "min_lux": None, "max_lux": None},
+            "light_summary": {
+                "samples": 0,
+                "valid_samples": 0,
+                "latest_lux": None,
+                "avg_lux": None,
+                "min_lux": None,
+                "max_lux": None,
+            },
         },
     }
 

@@ -60,7 +60,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 |---------|------|----------------|
 | `AudioRouter` | `audio_router.py` | receive/emit: resample mic frames to 24kHz mono, poll output queue for audio deltas and `AdditionalOutputs` |
 | `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity |
-| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout |
+| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()` |
 | `TranscriptHandler` | `transcript_handler.py` | Captures and formats conversation transcripts |
 | `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data |
 
@@ -125,6 +125,17 @@ The project includes a custom hardware component under `hardware/`.
 - Escalating sweep behavior: passive probes first, physical head sweep only after N consecutive misses with cooldown
 - Post-focus quiet window suppresses probes after a confirmed target
 - All timing configurable via `HEALTHY_MM_WAVE_*` env vars
+
+### Sensor Dashboard (headless mode)
+
+The headless settings page (`static/index.html`) includes a sensor dashboard panel that displays live mmWave readings:
+- **Device state**: firmware person state (NO_TARGET, MOVING, STILL_NEAR, RESTING_VITALS, etc.)
+- **Target count**: number of detected targets, with truncation warning if >8 targets exceed the wire cap
+- **Heart rate / Breathing rate**: vitals when available (from `measure` or `locate_and_measure`)
+- **Ambient light**: lux reading from the BH1750 sensor
+- **Last scan mode and timestamp**
+
+Data flows: mmWave tool result → `extract_sensor_state()` in `tool_dispatcher.py` → `handler.sensor_state` dict → `GET /sensor` REST endpoint in `console.py` → frontend polls every 3 seconds.
 
 ### Light Context System
 

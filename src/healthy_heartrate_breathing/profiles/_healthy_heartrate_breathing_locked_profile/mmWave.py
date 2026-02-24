@@ -230,7 +230,9 @@ class MmWave(Tool):
         return seq
 
     def _send_command(self, ser: Any, tx_state: Dict[str, int], msg_type: int, payload: bytes = b"") -> None:
-        frame = encode_frame(msg_type=msg_type, payload=payload, seq=self._next_tx_seq(tx_state), version=PROTO_VERSION)
+        frame = encode_frame(
+            msg_type=msg_type, payload=payload, seq=self._next_tx_seq(tx_state), version=PROTO_VERSION
+        )
         try:
             ser.write(frame)
             ser.flush()
@@ -424,11 +426,14 @@ class MmWave(Tool):
     ) -> Dict[str, Any]:
         state = {
             "targets_seen": 0,
+            "max_target_count": 0,
+            "targets_truncated": False,
             "latest_target": None,
             "recent_targets": [],
             "latest_light": None,
             "light_samples": [],
             "state": None,
+            "device_state": None,
             "telemetry": [],
         }
         timeout = time.monotonic() + max(0.5, duration_s)
@@ -457,6 +462,11 @@ class MmWave(Tool):
                 if msg_type == "targets":
                     state["telemetry"].append(msg)
                     state["targets_seen"] += 1
+                    n = msg.get("n", 0)
+                    if isinstance(n, int) and n > state["max_target_count"]:
+                        state["max_target_count"] = n
+                    if msg.get("targets_truncated"):
+                        state["targets_truncated"] = True
                     best = self._pick_target_from_message(msg)
                     if best is not None:
                         state["latest_target"] = best
@@ -469,6 +479,7 @@ class MmWave(Tool):
                             break
                 if msg_type == "state":
                     state["state"] = msg.get("state")
+                    state["device_state"] = msg.get("state")
                 if msg_type == "light":
                     state["light_samples"].append(msg)
                     lux = msg.get("lux")
@@ -507,6 +518,7 @@ class MmWave(Tool):
             "latest_light": None,
             "light_samples": [],
             "state": None,
+            "device_state": None,
             "bio_messages": [],
             "valid_bio": None,
             "success": False,
@@ -534,6 +546,7 @@ class MmWave(Tool):
                 msg_type = msg.get("type")
                 if msg_type == "state":
                     result["state"] = msg
+                    result["device_state"] = msg.get("state")
                 if msg_type == "bio":
                     result["attempts"] += 1
                     result["latest_bio"] = msg
@@ -579,7 +592,9 @@ class MmWave(Tool):
 
         duration_s = float(coerce_float_nonneg(kwargs.get("duration_s", 0), 0.0))
         if mode == "locate_and_measure":
-            duration_s = coerce_float_nonneg(kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS)
+            duration_s = coerce_float_nonneg(
+                kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS
+            )
             measure_duration = coerce_float_nonneg(
                 kwargs.get("measure_duration_s", self.DEFAULT_MEASURE_SECONDS), self.DEFAULT_MEASURE_SECONDS
             )
@@ -587,7 +602,9 @@ class MmWave(Tool):
             targets_ms = coerce_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)
             bio_ms = coerce_ms(kwargs.get("bio_ms", self.DEFAULT_BIO_MS), self.DEFAULT_BIO_MS)
         elif mode == "scan":
-            duration_s = coerce_float_nonneg(kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS)
+            duration_s = coerce_float_nonneg(
+                kwargs.get("duration_s", self.DEFAULT_SCAN_SECONDS), self.DEFAULT_SCAN_SECONDS
+            )
             measure_duration = 0.0
             do_sweep = bool(kwargs.get("sweep_if_unseen", True))
             targets_ms = coerce_ms(kwargs.get("targets_ms", self.DEFAULT_TARGETS_MS), self.DEFAULT_TARGETS_MS)

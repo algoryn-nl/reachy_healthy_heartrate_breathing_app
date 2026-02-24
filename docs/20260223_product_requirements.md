@@ -30,10 +30,10 @@ Three modes:
 | `locate_and_measure` | Scan first, then measure the closest target | 8 s scan + 15 s measure |
 
 Returns:
-- **Targets**: up to 8 clusters with x/y position, range (m), bearing, velocity
+- **Targets**: up to 8 clusters with x/y position, range (m), bearing, velocity; `max_target_count` (highest count seen in session), `targets_truncated` flag (set when sensor detected more targets than the 8-target wire cap)
 - **Bio**: heart rate (bpm), breathing rate (bpm), validity flags
 - **Light**: ambient lux readings collected throughout the session
-- **State**: firmware state transitions (NO_TARGET, MULTI_TARGET, PRESENT_FAR, MOVING, STILL_NEAR, RESTING_VITALS)
+- **Device State**: firmware person state (`device_state`) surfaced as a named field in scan and measure results: NO_TARGET, MULTI_TARGET, PRESENT_FAR, MOVING, STILL_NEAR, RESTING_VITALS
 
 Vitals gating: heart/breath rates only reported when single-target, still, not head-moving, within near zone (35-150 cm). Guard rails: BR 4-30 bpm, HR 35-200 bpm.
 
@@ -86,6 +86,7 @@ Current profile tools: `dance`, `stop_dance`, `play_emotion`, `stop_emotion`, `m
 
 - **Gradio web UI**: `healthy-heartrate-breathing --gradio` at `http://127.0.0.1:7860/`
 - **Headless console**: `healthy-heartrate-breathing` (default)
+  - Settings page includes a **sensor dashboard** panel showing person state, target count, truncation warnings, heart rate, breathing rate, and ambient lux — updated via `GET /sensor` polling (3 s interval)
 - Both support `--debug` for verbose logging
 
 ## Hardware Requirements

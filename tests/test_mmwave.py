@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from healthy_heartrate_breathing.tool_dispatcher import extract_sensor_state
 from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave import MmWave
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
@@ -199,7 +200,11 @@ def _decode_written_frames(serial: FakeSerial) -> list[tuple[int, int, int, byte
 def test_frame_roundtrip_and_cobs_extraction() -> None:
     payload = b"\x00\x01\x02\x00"
     frame_1 = encode_frame(EVT_PONG, payload, seq=7)
-    frame_2 = encode_frame(EVT_STATE, _pack_state(t_ms=42, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344), seq=8)
+    frame_2 = encode_frame(
+        EVT_STATE,
+        _pack_state(t_ms=42, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344),
+        seq=8,
+    )
 
     buffer = bytearray()
     parts = [frame_1[:4], frame_1[4:] + frame_2[:5], frame_2[5:]]
@@ -324,10 +329,20 @@ async def test_locate_and_measure_partial_read_and_focus_lock(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_resync_after_corrupted_frame(monkeypatch: pytest.MonkeyPatch) -> None:
-    bad_frame = bytearray(encode_frame(EVT_STATE, _pack_state(t_ms=10, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=350), seq=10))
+    bad_frame = bytearray(
+        encode_frame(
+            EVT_STATE,
+            _pack_state(
+                t_ms=10, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=350
+            ),
+            seq=10,
+        )
+    )
     bad_frame[-3] ^= 0x11  # break crc while keeping delimiter
 
-    good_bio = encode_frame(EVT_BIO, _pack_bio(t_ms=20, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7900), seq=11)
+    good_bio = encode_frame(
+        EVT_BIO, _pack_bio(t_ms=20, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7900), seq=11
+    )
     stream = bytes(bad_frame) + good_bio
     _patch_serial_modules(monkeypatch, [{"bytes": stream}])
 
@@ -414,7 +429,11 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=20,
             ),
-            encode_frame(EVT_BIO, _pack_bio(t_ms=34993, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1400, hr_centi=8400), seq=21),
+            encode_frame(
+                EVT_BIO,
+                _pack_bio(t_ms=34993, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1400, hr_centi=8400),
+                seq=21,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -429,7 +448,13 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=22,
             ),
-            encode_frame(EVT_STATE, _pack_state(t_ms=35294, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344), seq=23),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=35294, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344
+                ),
+                seq=23,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -444,7 +469,13 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=24,
             ),
-            encode_frame(EVT_STATE, _pack_state(t_ms=35394, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344), seq=25),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=35394, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344
+                ),
+                seq=25,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -459,8 +490,20 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=26,
             ),
-            encode_frame(EVT_STATE, _pack_state(t_ms=35796, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344), seq=27),
-            encode_frame(EVT_STATE, _pack_state(t_ms=35896, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344), seq=28),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=35796, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344
+                ),
+                seq=27,
+            ),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=35896, state_enum=2, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=344
+                ),
+                seq=28,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -475,8 +518,18 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=29,
             ),
-            encode_frame(EVT_BIO, _pack_bio(t_ms=35996, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7900), seq=30),
-            encode_frame(EVT_STATE, _pack_state(t_ms=36302, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344), seq=31),
+            encode_frame(
+                EVT_BIO,
+                _pack_bio(t_ms=35996, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7900),
+                seq=30,
+            ),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=36302, state_enum=2, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=344
+                ),
+                seq=31,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -491,7 +544,13 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=32,
             ),
-            encode_frame(EVT_STATE, _pack_state(t_ms=36402, state_enum=4, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=401), seq=33),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=36402, state_enum=4, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=401
+                ),
+                seq=33,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -506,7 +565,13 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=34,
             ),
-            encode_frame(EVT_STATE, _pack_state(t_ms=36904, state_enum=4, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=401), seq=35),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=36904, state_enum=4, pose_enum=1, head_moving=0, human=0, n_targets=0, dist_new=0, dist_mm=401
+                ),
+                seq=35,
+            ),
             encode_frame(
                 EVT_TARGETS,
                 _pack_targets_single(
@@ -521,8 +586,18 @@ async def test_locate_and_measure_with_full_mixed_stream(monkeypatch: pytest.Mon
                 ),
                 seq=36,
             ),
-            encode_frame(EVT_STATE, _pack_state(t_ms=37004, state_enum=4, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=401), seq=37),
-            encode_frame(EVT_BIO, _pack_bio(t_ms=37004, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1000, hr_centi=7600), seq=38),
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=37004, state_enum=4, pose_enum=1, head_moving=0, human=1, n_targets=1, dist_new=1, dist_mm=401
+                ),
+                seq=37,
+            ),
+            encode_frame(
+                EVT_BIO,
+                _pack_bio(t_ms=37004, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1000, hr_centi=7600),
+                seq=38,
+            ),
         ]
     )
     _patch_serial_modules(monkeypatch, [{"bytes": stream, "read_chunk_size": 7}])
@@ -634,7 +709,9 @@ def test_poll_events_warns_once_on_version_mismatch(caplog: pytest.LogCaptureFix
 
     import logging
 
-    with caplog.at_level(logging.DEBUG, logger="healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave"):
+    with caplog.at_level(
+        logging.DEBUG, logger="healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave"
+    ):
         events = tool._poll_events(ser, rx_buffer)
 
     # Both frames should be dropped
@@ -1014,3 +1091,208 @@ def test_resolve_probe_skips_port_on_open_error(monkeypatch: pytest.MonkeyPatch)
     )
     tool = MmWave()
     assert tool._resolve_serial_port(None) == "/dev/cu.usbmodem201"
+
+
+# ---------------------------------------------------------------------------
+# Targets truncation flag and device state surfacing tests
+# ---------------------------------------------------------------------------
+
+
+def test_scan_sync_surfaces_truncation_flag_and_max_target_count() -> None:
+    targets_payload = _pack_targets_single(
+        t_ms=1000,
+        forced_focus=-1,
+        cluster=2,
+        x_mm=100,
+        y_mm=500,
+        r_mm=510,
+        bearing_cdeg=200,
+        v_x10=0,
+        truncated=True,
+    )
+    stream = encode_frame(EVT_TARGETS, targets_payload, seq=1)
+
+    ser = FailingSerial(stream, reads_before_disconnect=1)
+    tool = MmWave()
+    tx_state = {"seq": 0}
+
+    result = tool._scan_sync(
+        ser,
+        deps=_deps(),
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        duration_s=5.0,
+        do_sweep=False,
+        focus_cluster=-1,
+        targets_ms=250,
+    )
+
+    assert result["targets_truncated"] is True
+    assert result["max_target_count"] == 1
+
+
+def test_scan_sync_no_truncation_by_default() -> None:
+    targets_payload = _pack_targets_single(
+        t_ms=1000,
+        forced_focus=-1,
+        cluster=2,
+        x_mm=100,
+        y_mm=500,
+        r_mm=510,
+        bearing_cdeg=200,
+        v_x10=0,
+        truncated=False,
+    )
+    stream = encode_frame(EVT_TARGETS, targets_payload, seq=1)
+
+    ser = FailingSerial(stream, reads_before_disconnect=1)
+    tool = MmWave()
+    tx_state = {"seq": 0}
+
+    result = tool._scan_sync(
+        ser,
+        deps=_deps(),
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        duration_s=5.0,
+        do_sweep=False,
+        focus_cluster=-1,
+        targets_ms=250,
+    )
+
+    assert result["targets_truncated"] is False
+    assert result["max_target_count"] == 1
+
+
+def test_scan_sync_surfaces_device_state() -> None:
+    state_payload = _pack_state(
+        t_ms=1000,
+        state_enum=5,  # RESTING_VITALS
+        pose_enum=1,
+        head_moving=0,
+        human=1,
+        n_targets=1,
+        dist_new=1,
+        dist_mm=500,
+    )
+    stream = encode_frame(EVT_STATE, state_payload, seq=1)
+
+    ser = FailingSerial(stream, reads_before_disconnect=1)
+    tool = MmWave()
+    tx_state = {"seq": 0}
+
+    result = tool._scan_sync(
+        ser,
+        deps=_deps(),
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        duration_s=5.0,
+        do_sweep=False,
+        focus_cluster=-1,
+        targets_ms=250,
+    )
+
+    assert result["device_state"] == "RESTING_VITALS"
+    assert result["state"] == "RESTING_VITALS"
+
+
+def test_measure_sync_surfaces_device_state() -> None:
+    state_payload = _pack_state(
+        t_ms=100,
+        state_enum=4,  # STILL_NEAR
+        pose_enum=1,
+        head_moving=0,
+        human=1,
+        n_targets=1,
+        dist_new=1,
+        dist_mm=400,
+    )
+    bio_payload = _pack_bio(t_ms=200, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7200)
+    stream = encode_frame(EVT_STATE, state_payload, seq=1) + encode_frame(EVT_BIO, bio_payload, seq=2)
+
+    ser = FailingSerial(stream, reads_before_disconnect=1)
+    tool = MmWave()
+    tx_state = {"seq": 0}
+
+    result = tool._measure_sync(
+        ser,
+        tx_state=tx_state,
+        rx_buffer=bytearray(),
+        focus_cluster=-1,
+        timeout_s=5.0,
+        bio_ms=1000,
+    )
+
+    assert result["device_state"] == "STILL_NEAR"
+    assert result["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# extract_sensor_state tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_sensor_state_from_full_result() -> None:
+    result = {
+        "mode": "locate_and_measure",
+        "status": "ok",
+        "scan": {
+            "max_target_count": 3,
+            "targets_truncated": True,
+            "device_state": "STILL_NEAR",
+            "latest_target": {"cluster": 0, "r": 0.51, "bearing": -12.8},
+            "light_summary": {"latest_lux": 42.5},
+        },
+        "measure": {
+            "device_state": "RESTING_VITALS",
+            "valid_bio": {"heart_rate_bpm": 72.0, "breath_rate_bpm": 14.0},
+            "light_summary": {"latest_lux": 43.0},
+        },
+        "light_context": {"context_state": "neutral"},
+    }
+
+    state = extract_sensor_state(result)
+
+    assert state["target_count"] == 3
+    assert state["targets_truncated"] is True
+    assert state["device_state"] == "RESTING_VITALS"  # measure overrides scan
+    assert state["heart_rate_bpm"] == 72.0
+    assert state["breath_rate_bpm"] == 14.0
+    assert state["lux"] == 43.0  # measure overrides scan
+    assert state["closest_target_r"] == 0.51
+    assert state["light_context_state"] == "neutral"
+    assert state["mode"] == "locate_and_measure"
+    assert state["status"] == "ok"
+    assert "updated_at" in state
+
+
+def test_extract_sensor_state_scan_only() -> None:
+    result = {
+        "mode": "scan",
+        "status": "scan_done",
+        "scan": {
+            "max_target_count": 1,
+            "targets_truncated": False,
+            "device_state": "PRESENT_FAR",
+            "latest_target": None,
+            "light_summary": {"latest_lux": 100.0},
+        },
+    }
+
+    state = extract_sensor_state(result)
+
+    assert state["target_count"] == 1
+    assert state["targets_truncated"] is False
+    assert state["device_state"] == "PRESENT_FAR"
+    assert "heart_rate_bpm" not in state
+    assert state["lux"] == 100.0
+
+
+def test_extract_sensor_state_empty_result() -> None:
+    result: dict[str, Any] = {"mode": "scan", "status": "scan_done"}
+
+    state = extract_sensor_state(result)
+
+    assert state["mode"] == "scan"
+    assert "target_count" not in state
+    assert "updated_at" in state

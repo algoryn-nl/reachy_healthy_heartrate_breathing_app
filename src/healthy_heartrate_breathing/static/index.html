@@ -47,6 +47,47 @@
           <p id="status" class="status"></p>
         </div>
       </div>
+
+      <div id="sensor-panel" class="panel hidden">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Sensor Dashboard</p>
+            <h2>mmWave Radar</h2>
+          </div>
+          <span id="sensor-chip" class="chip">Waiting</span>
+        </div>
+        <div class="sensor-grid">
+          <div class="sensor-card">
+            <span class="sensor-label">Person State</span>
+            <span id="s-device-state" class="sensor-value">--</span>
+          </div>
+          <div class="sensor-card">
+            <span class="sensor-label">Targets</span>
+            <span id="s-target-count" class="sensor-value">--</span>
+            <span id="s-truncated" class="sensor-warn hidden">Truncated</span>
+          </div>
+          <div class="sensor-card">
+            <span class="sensor-label">Heart Rate</span>
+            <span id="s-hr" class="sensor-value sensor-value-lg">--</span>
+            <span class="sensor-unit">bpm</span>
+          </div>
+          <div class="sensor-card">
+            <span class="sensor-label">Breathing</span>
+            <span id="s-br" class="sensor-value sensor-value-lg">--</span>
+            <span class="sensor-unit">bpm</span>
+          </div>
+          <div class="sensor-card">
+            <span class="sensor-label">Ambient Light</span>
+            <span id="s-lux" class="sensor-value">--</span>
+            <span class="sensor-unit">lux</span>
+          </div>
+          <div class="sensor-card">
+            <span class="sensor-label">Last Scan</span>
+            <span id="s-mode" class="sensor-value sensor-value-sm">--</span>
+            <span id="s-updated" class="sensor-ts">--</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="/static/main.js"></script>

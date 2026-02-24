@@ -139,9 +139,7 @@ class LightContext(Tool):
         allow_wellness_nudges = coerce_bool(kwargs.get("allow_wellness_nudges"), True)
         active_interaction = coerce_bool(kwargs.get("active_interaction"), True)
         presence_detected_raw = kwargs.get("presence_detected")
-        presence_detected = (
-            bool(presence_detected_raw) if isinstance(presence_detected_raw, bool) else None
-        )
+        presence_detected = bool(presence_detected_raw) if isinstance(presence_detected_raw, bool) else None
         low_light_duration_min = coerce_float(kwargs.get("low_light_duration_min"), 0.0) or 0.0
         user_typical_day_low_lux = coerce_float(kwargs.get("user_typical_day_low_lux"))
 
@@ -159,8 +157,8 @@ class LightContext(Tool):
         else:
             is_low_lux = lux <= (low_lux_threshold or self.DEFAULT_LOW_LUX_THRESHOLD)
             is_bright_lux = lux >= (bright_lux_threshold or self.DEFAULT_BRIGHT_LUX_THRESHOLD)
-            sharp_drop = (
-                lux_delta_60s is not None and lux_delta_60s <= -(sharp_drop_lux or self.DEFAULT_SHARP_DROP_LUX)
+            sharp_drop = lux_delta_60s is not None and lux_delta_60s <= -(
+                sharp_drop_lux or self.DEFAULT_SHARP_DROP_LUX
             )
             presence_ok = presence_detected is not False
 
