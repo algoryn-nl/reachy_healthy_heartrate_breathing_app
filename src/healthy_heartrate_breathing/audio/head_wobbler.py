@@ -146,16 +146,6 @@ class HeadWobbler:
                 queue_ref.task_done()
         logger.debug("Head wobbler thread exited")
 
-    '''
-    def drain_audio_queue(self) -> None:
-        """Empty the audio queue."""
-        try:
-            while True:
-                self.audio_queue.get_nowait()
-        except QueueEmpty:
-            pass
-    '''
-
     def reset(self) -> None:
         """Reset the internal state."""
         with self._state_lock:
