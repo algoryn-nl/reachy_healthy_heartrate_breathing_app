@@ -555,6 +555,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         if hasattr(self, "_dispatcher"):
             await self._dispatcher.cancel()
 
+        # Flush any dirty light baseline to disk
+        self.light_orchestrator.flush()
+
         if self.connection:
             try:
                 await self.connection.close()

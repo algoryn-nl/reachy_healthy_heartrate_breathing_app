@@ -15,7 +15,6 @@
 ### Upcoming — Medium Priority
 
 - [ ] Reset idle tool call flag on exception path (openai_realtime.py:538-583)
-- [ ] Batch light baseline saves with timer-based flush (light_orchestrator.py:156)
 - [ ] Refactor tool registry to avoid global side effects at import (core_tools.py:286)
 - [ ] Validate tool loading matches tools.txt expectations (core_tools.py:143-264)
 - [ ] Pin Gradio to stable version (pyproject.toml)
@@ -45,6 +44,7 @@
 - [x] Add mmWave env tuning defaults (2026-02-23)
 - [x] Non-blocking tool dispatch with timeout, semaphore, and cancellation (2026-02-23)
 - [x] Verify lux extraction paths match mmWave output — confirmed correct, added regression tests (2026-02-24)
+- [x] Throttle light baseline saves with dirty flag + 60s interval, flush at shutdown (2026-02-24)
 
 ## Notes
 

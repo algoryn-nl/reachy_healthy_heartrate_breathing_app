@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import time
 import logging
 from typing import Any, Callable, Awaitable
 from pathlib import Path
@@ -36,6 +37,7 @@ class LightOrchestrator:
         baseline_min_samples: int = 5,
         baseline_path: Path | None = None,
         analytics_path: Path | None = None,
+        baseline_save_interval_s: float = 60.0,
     ) -> None:
         self.enabled = enabled
         self.analytics_enabled = analytics_enabled
@@ -50,12 +52,15 @@ class LightOrchestrator:
         self.baseline_min_samples = baseline_min_samples
         self.baseline_path = baseline_path
         self.analytics_path = analytics_path
+        self.baseline_save_interval_s = baseline_save_interval_s
 
         # Mutable state
         self._baseline_state: dict[str, Any] = {"schema_version": 1, "users": {}}
         self._last_lux: float | None = None
         self._last_lux_time: float | None = None
         self._low_since_time: float | None = None
+        self._baseline_dirty: bool = False
+        self._last_save_time: float = 0.0
 
         if self.baseline_path is not None:
             self.load_baseline()
@@ -85,15 +90,33 @@ class LightOrchestrator:
             self._baseline_state = default
 
     def save_baseline(self) -> None:
-        """Persist baseline JSON state to disk."""
+        """Persist baseline JSON state to disk if dirty and interval has elapsed."""
         if self.baseline_path is None:
             return
+        if not self._baseline_dirty:
+            return
+        now = time.monotonic()
+        if now - self._last_save_time < self.baseline_save_interval_s:
+            return
+        self._write_baseline(now)
+
+    def flush(self) -> None:
+        """Force-write dirty baseline to disk (call at shutdown)."""
+        if self.baseline_path is None or not self._baseline_dirty:
+            return
+        self._write_baseline(time.monotonic())
+
+    def _write_baseline(self, now: float) -> None:
+        """Write baseline state to disk unconditionally."""
+        assert self.baseline_path is not None
         try:
             self.baseline_path.parent.mkdir(parents=True, exist_ok=True)
             self.baseline_path.write_text(
                 json.dumps(self._baseline_state, ensure_ascii=True, indent=2),
                 encoding="utf-8",
             )
+            self._baseline_dirty = False
+            self._last_save_time = now
         except Exception as e:
             logger.warning("Failed writing light baseline to %s: %s", self.baseline_path, e)
 
@@ -153,6 +176,7 @@ class LightOrchestrator:
         bucket["ema_lux"] = round(float(next_ema), 3)
         bucket["samples"] = samples
         entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._baseline_dirty = True
         self.save_baseline()
 
     def get_typical_day_low_lux(self, local_hour: int) -> float | None:

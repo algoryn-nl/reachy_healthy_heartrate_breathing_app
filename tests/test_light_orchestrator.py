@@ -26,6 +26,7 @@ def _orchestrator(tmp_path: Path, **overrides: object) -> LightOrchestrator:
         "baseline_min_samples": 5,
         "baseline_path": tmp_path / "baseline.json",
         "analytics_path": tmp_path / "analytics.jsonl",
+        "baseline_save_interval_s": 0,  # flush immediately in tests
     }
     defaults.update(overrides)
     return LightOrchestrator(**defaults)
@@ -81,6 +82,39 @@ class TestBaseline:
         assert o.is_daytime_hour(6) is False
         assert o.is_daytime_hour(20) is False
         assert o.is_daytime_hour(7) is True
+
+
+class TestBaselineThrottling:
+    def test_save_throttled_within_interval(self, tmp_path: Path) -> None:
+        o = _orchestrator(tmp_path, baseline_save_interval_s=300)
+        o.update_baseline(lux=100.0, local_hour=12)
+        # First save goes through (last_save_time starts at 0)
+        assert o.baseline_path.exists()
+        first_content = o.baseline_path.read_text()
+
+        # Second update within interval: save_baseline is a no-op on disk
+        o.update_baseline(lux=200.0, local_hour=12)
+        assert o.baseline_path.read_text() == first_content  # unchanged on disk
+        assert o._baseline_dirty is True  # but marked dirty in memory
+
+    def test_flush_writes_dirty_state(self, tmp_path: Path) -> None:
+        o = _orchestrator(tmp_path, baseline_save_interval_s=300)
+        o.update_baseline(lux=100.0, local_hour=12)
+        first_content = o.baseline_path.read_text()
+
+        o.update_baseline(lux=200.0, local_hour=12)
+        assert o._baseline_dirty is True
+        o.flush()
+        assert o._baseline_dirty is False
+        assert o.baseline_path.read_text() != first_content  # updated
+
+    def test_flush_noop_when_clean(self, tmp_path: Path) -> None:
+        o = _orchestrator(tmp_path, baseline_save_interval_s=0)
+        o.update_baseline(lux=100.0, local_hour=12)
+        assert o._baseline_dirty is False  # interval=0 means save_baseline wrote immediately
+        o.baseline_path.unlink()  # remove file
+        o.flush()  # should not recreate it
+        assert not o.baseline_path.exists()
 
 
 class TestRunFromMmwave:
