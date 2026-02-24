@@ -39,6 +39,44 @@ The mmWave tool communicates with custom firmware on an Arduino-connected mmWave
 
 The tool picks the closest valid target during scan and automatically focuses the radar on that cluster for bio measurement. An optional sweep mode rotates the robot head left-center-right to widen the scan field.
 
+### Idle Scanning Policy (`idle_policy.py`)
+
+When the robot has no active conversation, an `IdlePolicy` state machine controls periodic mmWave probes to detect approaching people. The policy escalates from passive probes to active head sweeps after repeated misses.
+
+```
+    WAITING (idle timer not met or robot moving)
+        │
+        │ idle_duration > probe_interval_s AND not moving
+        ▼
+    TRIGGER GATE (post-focus quiet expired?)
+        │
+        ├── No  → suppress, stay WAITING
+        │
+        ├── Yes, misses < N → PASSIVE PROBE (no head sweep)
+        │       │
+        │       ├── target found   → reset misses, enter POST_FOCUS_QUIET
+        │       ├── no target      → misses += 1
+        │       └── inconclusive   → no change
+        │
+        └── Yes, misses >= N, cooldown expired → ACTIVE SWEEP (head rotates L/C/R)
+                │
+                ├── target found   → reset misses, enter POST_FOCUS_QUIET
+                ├── no target      → reset misses (sweep counts as full attempt)
+                └── inconclusive   → no change
+```
+
+**Parameters** (all configurable via env vars):
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEALTHY_MM_WAVE_IDLE_PROBE_INTERVAL_S` | 40.0 | Seconds idle before probe |
+| `HEALTHY_MM_WAVE_IDLE_PROBE_DURATION_S` | 5.0 | Duration of each probe |
+| `HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP` | 3 | Consecutive misses before escalation |
+| `HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S` | 150.0 | Seconds between sweeps |
+| `HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S` | 45.0 | Quiet window after target found |
+
+Full state diagram and transition details in `idle_policy.py` module docstring.
+
 **Serial port resolution** (in order):
 1. Explicit `serial_port` parameter
 2. `MMWAVE_SERIAL_PORT` environment variable

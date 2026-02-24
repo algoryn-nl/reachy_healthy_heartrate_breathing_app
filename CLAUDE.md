@@ -59,7 +59,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 | Handler | File | Responsibility |
 |---------|------|----------------|
 | `AudioRouter` | `audio_router.py` | receive/emit: resample mic frames to 24kHz mono, poll output queue for audio deltas and `AdditionalOutputs` |
-| `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity |
+| `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity (state diagram in module docstring) |
 | `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()` |
 | `TranscriptHandler` | `transcript_handler.py` | Captures and formats conversation transcripts |
 | `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data |
@@ -120,11 +120,13 @@ The project includes a custom hardware component under `hardware/`.
   - Serial port auto-detection: three-tier strategy (VID/PID `0x303A:0x1001` → glob fallback → HELLO probe with `CMD_PING`/`EVT_PONG` or DTR reset → `EVT_HELLO`)
 - Decode utility: `hardware/tools/mmwave_decode.py` — CLI for live serial or capture file decoding (`--format pretty|json`)
 
-**Idle scanning policy** (in `OpenaiRealtimeHandler`):
+**Idle scanning policy** (in `OpenaiRealtimeHandler`, state machine in `idle_policy.py`):
 - Calm periodic mmWave probing when the robot is idle
+- Two trigger gates: idle duration exceeded AND robot stationary AND post-focus quiet expired
 - Escalating sweep behavior: passive probes first, physical head sweep only after N consecutive misses with cooldown
 - Post-focus quiet window suppresses probes after a confirmed target
 - All timing configurable via `HEALTHY_MM_WAVE_*` env vars
+- Full state diagram and transition table in `idle_policy.py` module docstring
 
 ### Sensor Dashboard (headless mode)
 
