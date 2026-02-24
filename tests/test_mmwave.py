@@ -1296,3 +1296,32 @@ def test_extract_sensor_state_empty_result() -> None:
     assert state["mode"] == "scan"
     assert "target_count" not in state
     assert "updated_at" in state
+
+
+def test_extract_sensor_state_error_result() -> None:
+    """Error results produce state with error field and disconnected status."""
+    result: dict[str, Any] = {
+        "error": "serial error on /dev/ttyUSB0: device disconnected",
+        "status": "disconnected",
+    }
+
+    state = extract_sensor_state(result)
+
+    assert state["error"] == "serial error on /dev/ttyUSB0: device disconnected"
+    assert state["status"] == "disconnected"
+    assert "updated_at" in state
+    # Error results should NOT contain scan/measure fields
+    assert "target_count" not in state
+    assert "heart_rate_bpm" not in state
+    assert "device_state" not in state
+
+
+def test_extract_sensor_state_error_without_status() -> None:
+    """Error results without explicit status get a generic 'error' status."""
+    result: dict[str, Any] = {"error": "something went wrong"}
+
+    state = extract_sensor_state(result)
+
+    assert state["error"] == "something went wrong"
+    assert state["status"] == "error"
+    assert "updated_at" in state

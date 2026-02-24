@@ -43,25 +43,29 @@ The tool picks the closest valid target during scan and automatically focuses th
 
 When the robot has no active conversation, an `IdlePolicy` state machine controls periodic mmWave probes to detect approaching people. The policy escalates from passive probes to active head sweeps after repeated misses.
 
+When the sensor disconnects (USB unplug, serial errors), the policy tracks consecutive errors and suppresses probing after a configurable threshold, backing off for `error_backoff_s` seconds before retrying. Successful communication resets the error counter automatically.
+
 ```
     WAITING (idle timer not met or robot moving)
         │
         │ idle_duration > probe_interval_s AND not moving
         ▼
-    TRIGGER GATE (post-focus quiet expired?)
+    TRIGGER GATE (post-focus quiet expired? sensor error backoff expired?)
         │
         ├── No  → suppress, stay WAITING
         │
         ├── Yes, misses < N → PASSIVE PROBE (no head sweep)
         │       │
-        │       ├── target found   → reset misses, enter POST_FOCUS_QUIET
-        │       ├── no target      → misses += 1
+        │       ├── target found   → reset misses + errors, enter POST_FOCUS_QUIET
+        │       ├── no target      → misses += 1, reset errors
+        │       ├── error          → errors += 1 (suppress after threshold)
         │       └── inconclusive   → no change
         │
         └── Yes, misses >= N, cooldown expired → ACTIVE SWEEP (head rotates L/C/R)
                 │
-                ├── target found   → reset misses, enter POST_FOCUS_QUIET
+                ├── target found   → reset misses + errors, enter POST_FOCUS_QUIET
                 ├── no target      → reset misses (sweep counts as full attempt)
+                ├── error          → errors += 1 (suppress after threshold)
                 └── inconclusive   → no change
 ```
 
@@ -74,6 +78,8 @@ When the robot has no active conversation, an `IdlePolicy` state machine control
 | `HEALTHY_MM_WAVE_MISSES_BEFORE_SWEEP` | 3 | Consecutive misses before escalation |
 | `HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S` | 150.0 | Seconds between sweeps |
 | `HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S` | 45.0 | Quiet window after target found |
+| `HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION` | 3 | Consecutive errors before suppression |
+| `HEALTHY_MM_WAVE_ERROR_BACKOFF_S` | 120.0 | Seconds to wait before retry after suppression |
 
 Full state diagram and transition details in `idle_policy.py` module docstring.
 

@@ -583,7 +583,11 @@ class MmWave(Tool):
         if mode not in {"scan", "measure", "locate_and_measure"}:
             return {"error": f"invalid mode '{mode}', use scan, measure, or locate_and_measure"}
 
-        serial_port = self._resolve_serial_port(kwargs.get("serial_port"))
+        try:
+            serial_port = self._resolve_serial_port(kwargs.get("serial_port"))
+        except RuntimeError as e:
+            logger.warning("mmWave port resolution failed: %s", e)
+            return {"error": str(e), "status": "disconnected"}
         try:
             import serial
             import serial.serialutil
@@ -675,7 +679,11 @@ class MmWave(Tool):
         try:
             return await asyncio.to_thread(run_session)
         except serial.serialutil.SerialException as e:
-            return {"error": f"serial error on {serial_port}: {e}"}
+            logger.warning("mmWave serial exception on %s: %s", serial_port, e)
+            return {"error": f"serial error on {serial_port}: {e}", "status": "disconnected"}
+        except OSError as e:
+            logger.warning("mmWave OS error on %s: %s", serial_port, e)
+            return {"error": f"device I/O error on {serial_port}: {e}", "status": "disconnected"}
         except Exception as e:
             logger.exception("mmWave tool failed")
             return {"error": str(e)}

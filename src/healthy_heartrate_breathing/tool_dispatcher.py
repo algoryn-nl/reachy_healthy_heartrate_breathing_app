@@ -17,8 +17,22 @@ logger = logging.getLogger(__name__)
 
 
 def extract_sensor_state(mmwave_result: dict[str, Any]) -> dict[str, Any]:
-    """Extract a flat sensor-state snapshot from an mmWave tool result."""
+    """Extract a flat sensor-state snapshot from an mmWave tool result.
+
+    When the result contains an error (e.g. serial disconnect), the returned
+    state includes ``"error"`` and ``"status": "disconnected"`` so that the
+    dashboard can display a meaningful disconnected indicator instead of
+    silently hiding the panel.
+    """
     state: dict[str, Any] = {"updated_at": time.time()}
+
+    # Propagate error information for dashboard display
+    error = mmwave_result.get("error")
+    if error:
+        state["error"] = str(error)
+        state["status"] = mmwave_result.get("status", "error")
+        state["mode"] = mmwave_result.get("mode")
+        return state
 
     scan = mmwave_result.get("scan")
     measure = mmwave_result.get("measure")
@@ -275,6 +289,7 @@ class ToolDispatcher:
             now = asyncio.get_event_loop().time()
             if isinstance(tool_result, dict) and tool_result.get("error"):
                 logger.warning("Idle mmWave failed: %s", _short_text(tool_result.get("error")))
+                self._idle_policy.record_error(now)
             elif _mmwave_has_target(tool_result):
                 self._idle_policy.record_target_found(now)
             elif _mmwave_is_no_target(tool_result):
@@ -306,7 +321,7 @@ class ToolDispatcher:
                 logger.warning("Auto light_context failed after mmWave: %s", e)
 
         # Update sensor state for dashboard polling
-        if tool_name == "mmWave" and isinstance(tool_result, dict) and not tool_result.get("error"):
+        if tool_name == "mmWave" and isinstance(tool_result, dict):
             try:
                 if self._on_sensor_update is not None:
                     self._on_sensor_update(extract_sensor_state(tool_result))

@@ -158,6 +158,103 @@ class TestIdlePolicyIntegration:
         assert policy.consecutive_misses == 1
 
 
+class TestIdleErrorTracking:
+    @pytest.mark.asyncio
+    async def test_idle_mmwave_error_calls_record_error(self, tmp_path) -> None:
+        """When idle mmWave returns an error, record_error() is called on the policy."""
+        policy = _idle_policy()
+        result = {"error": "serial error on /dev/ttyUSB0: device disconnected", "status": "disconnected"}
+        dispatch = AsyncMock(return_value=result)
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-e1", is_idle=True)
+        assert policy.consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_repeated_errors_suppress_probing(self, tmp_path) -> None:
+        """After errors_before_suppression consecutive errors, probing is suppressed."""
+        policy = _idle_policy(errors_before_suppression=2, error_backoff_s=60.0)
+        error_result = {"error": "device disconnected", "status": "disconnected"}
+        dispatch = AsyncMock(return_value=error_result)
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
+
+        # Two consecutive errors
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=True)
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c2", is_idle=True)
+        assert policy.consecutive_errors == 2
+        assert policy.sensor_suppressed is True
+
+    @pytest.mark.asyncio
+    async def test_successful_result_after_errors_resets(self, tmp_path) -> None:
+        """A successful result after errors resets the error counter."""
+        policy = _idle_policy(errors_before_suppression=2)
+        dispatch = AsyncMock()
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
+
+        # Two errors
+        dispatch.return_value = {"error": "disconnected", "status": "disconnected"}
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=True)
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c2", is_idle=True)
+        assert policy.consecutive_errors == 2
+
+        # Successful result with target
+        dispatch.return_value = {"scan": {"latest_target": {"x": 1.0, "y": 2.0}}}
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c3", is_idle=True)
+        assert policy.consecutive_errors == 0
+        assert policy.sensor_suppressed is False
+
+
+def _replace_sensor_state(target: dict) -> object:
+    """Create a callback that replaces (clear+update) like the real handler."""
+
+    def _cb(state: dict) -> None:
+        target.clear()
+        target.update(state)
+
+    return _cb
+
+
+class TestSensorStateOnError:
+    @pytest.mark.asyncio
+    async def test_error_result_updates_sensor_state(self, tmp_path) -> None:
+        """MmWave error results should propagate to sensor_state for dashboard."""
+        sensor_state: dict = {}
+        error_result = {"error": "serial error on /dev/ttyUSB0", "status": "disconnected"}
+        dispatch = AsyncMock(return_value=error_result)
+        d = _dispatcher(
+            tmp_path,
+            dispatch_tool=dispatch,
+            on_sensor_update=_replace_sensor_state(sensor_state),
+        )
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=False)
+        assert sensor_state.get("error") is not None
+        assert sensor_state.get("status") == "disconnected"
+        assert "updated_at" in sensor_state
+
+    @pytest.mark.asyncio
+    async def test_successful_result_clears_error_in_sensor_state(self, tmp_path) -> None:
+        """After an error, a successful result should produce state without error."""
+        sensor_state: dict = {}
+        dispatch = AsyncMock()
+        d = _dispatcher(
+            tmp_path,
+            dispatch_tool=dispatch,
+            on_sensor_update=_replace_sensor_state(sensor_state),
+        )
+
+        # First: error
+        dispatch.return_value = {"error": "disconnected", "status": "disconnected"}
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=False)
+        assert sensor_state.get("status") == "disconnected"
+
+        # Second: success
+        dispatch.return_value = {"scan": {"latest_target": None, "targets_seen": 0}, "status": "scan_done"}
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c2", is_idle=False)
+        assert sensor_state.get("error") is None
+        assert sensor_state.get("status") == "scan_done"
+
+
 class TestHeadWobblerReset:
     @pytest.mark.asyncio
     async def test_resets_wobbler_after_tool_call(self, tmp_path) -> None:
