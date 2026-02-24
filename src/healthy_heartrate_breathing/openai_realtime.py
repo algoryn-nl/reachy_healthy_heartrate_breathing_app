@@ -4,6 +4,7 @@ import random
 import asyncio
 import logging
 from typing import Any, Final, Tuple, Literal, Optional
+from decimal import Decimal
 from pathlib import Path
 from datetime import datetime
 
@@ -33,25 +34,27 @@ OPEN_AI_INPUT_SAMPLE_RATE: Final[Literal[24000]] = 24000
 OPEN_AI_OUTPUT_SAMPLE_RATE: Final[Literal[24000]] = 24000
 
 # Cost tracking from usage data (pricing as of Feb 2026 https://openai.com/api/pricing/)
-AUDIO_INPUT_COST_PER_1M = 32.0
-AUDIO_OUTPUT_COST_PER_1M = 64.0
-TEXT_INPUT_COST_PER_1M = 4.0
-TEXT_OUTPUT_COST_PER_1M = 16.0
-IMAGE_INPUT_COST_PER_1M = 5.0
+# Decimal avoids float precision loss during cumulative cost accumulation.
+_1M = Decimal("1_000_000")
+AUDIO_INPUT_COST_PER_1M = Decimal("32")
+AUDIO_OUTPUT_COST_PER_1M = Decimal("64")
+TEXT_INPUT_COST_PER_1M = Decimal("4")
+TEXT_OUTPUT_COST_PER_1M = Decimal("16")
+IMAGE_INPUT_COST_PER_1M = Decimal("5")
 
 
-def _compute_response_cost(usage: Any) -> float:
+def _compute_response_cost(usage: Any) -> Decimal:
     """Compute dollar cost from a response usage object."""
     inp = getattr(usage, "input_token_details", None)
     out = getattr(usage, "output_token_details", None)
-    cost = 0.0
+    cost = Decimal(0)
     if inp:
-        cost += (getattr(inp, "audio_tokens", 0) or 0) * AUDIO_INPUT_COST_PER_1M / 1e6
-        cost += (getattr(inp, "text_tokens", 0) or 0) * TEXT_INPUT_COST_PER_1M / 1e6
-        cost += (getattr(inp, "image_tokens", 0) or 0) * IMAGE_INPUT_COST_PER_1M / 1e6
+        cost += (getattr(inp, "audio_tokens", 0) or 0) * AUDIO_INPUT_COST_PER_1M / _1M
+        cost += (getattr(inp, "text_tokens", 0) or 0) * TEXT_INPUT_COST_PER_1M / _1M
+        cost += (getattr(inp, "image_tokens", 0) or 0) * IMAGE_INPUT_COST_PER_1M / _1M
     if out:
-        cost += (getattr(out, "audio_tokens", 0) or 0) * AUDIO_OUTPUT_COST_PER_1M / 1e6
-        cost += (getattr(out, "text_tokens", 0) or 0) * TEXT_OUTPUT_COST_PER_1M / 1e6
+        cost += (getattr(out, "audio_tokens", 0) or 0) * AUDIO_OUTPUT_COST_PER_1M / _1M
+        cost += (getattr(out, "text_tokens", 0) or 0) * TEXT_OUTPUT_COST_PER_1M / _1M
     return cost
 
 
@@ -92,8 +95,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self._shutdown_requested: bool = False
         self._connected_event: asyncio.Event = asyncio.Event()
 
-        # Cost tracking
-        self.cumulative_cost: float = 0.0
+        # Cost tracking (Decimal avoids float precision loss over many responses)
+        self.cumulative_cost: Decimal = Decimal(0)
 
         # Latest sensor readings (updated after each mmWave tool call, polled by /sensor endpoint)
         self.sensor_state: dict[str, Any] = {}

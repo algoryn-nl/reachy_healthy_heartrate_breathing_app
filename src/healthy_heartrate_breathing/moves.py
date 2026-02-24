@@ -77,6 +77,28 @@ LISTENING_DEBOUNCE_S = 0.15
 # while still surfacing the first occurrence immediately.
 SET_TARGET_ERR_LOG_INTERVAL_S = 1.0
 
+# BreathingMove parameters — control the idle breathing animation.
+# Z-axis amplitude (metres): 5 mm gentle chest-rise effect.
+BREATHING_Z_AMPLITUDE_M = 0.005
+# Breathing cycle frequency (Hz): 0.1 Hz ≈ 6 breaths per minute.
+BREATHING_FREQUENCY_HZ = 0.1
+# Antenna sway amplitude (degrees, converted to radians internally): ±15°.
+BREATHING_ANTENNA_SWAY_DEG = 15.0
+# Antenna sway frequency (Hz): faster than body breathing for liveliness.
+BREATHING_ANTENNA_FREQUENCY_HZ = 0.5
+# Duration (seconds) to interpolate from the current pose to neutral before
+# the breathing pattern begins.
+BREATHING_INTERPOLATION_DURATION_S = 1.0
+
+# Duration (seconds) for the goto-neutral reset issued when the movement
+# manager stops.  Long enough to look deliberate, short enough not to stall.
+NEUTRAL_GOTO_DURATION_S = 2.0
+
+# Multiplier applied to target_frequency to derive the telemetry log interval
+# (in loop iterations).  E.g. at 100 Hz with multiplier 2, telemetry logs
+# every 200 iterations (≈ every 2 s).
+FREQUENCY_LOG_INTERVAL_MULTIPLIER = 2
+
 # Type definitions
 FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
 
@@ -106,11 +128,11 @@ class BreathingMove(Move):  # type: ignore
         self.neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
         self.neutral_antennas = np.array([0.0, 0.0])
 
-        # Breathing parameters
-        self.breathing_z_amplitude = 0.005  # 5mm gentle breathing
-        self.breathing_frequency = 0.1  # Hz (6 breaths per minute)
-        self.antenna_sway_amplitude = np.deg2rad(15)  # 15 degrees
-        self.antenna_frequency = 0.5  # Hz (faster antenna sway)
+        # Breathing parameters (see module-level constants for documentation)
+        self.breathing_z_amplitude = BREATHING_Z_AMPLITUDE_M
+        self.breathing_frequency = BREATHING_FREQUENCY_HZ
+        self.antenna_sway_amplitude = np.deg2rad(BREATHING_ANTENNA_SWAY_DEG)
+        self.antenna_frequency = BREATHING_ANTENNA_FREQUENCY_HZ
 
     @property
     def duration(self) -> float:
@@ -533,7 +555,7 @@ class MovementManager:
                     breathing_move = BreathingMove(
                         interpolation_start_pose=current_head_pose,
                         interpolation_start_antennas=current_antennas,
-                        interpolation_duration=1.0,
+                        interpolation_duration=BREATHING_INTERPOLATION_DURATION_S,
                     )
                     self.move_queue.append(breathing_move)
                     logger.debug("Started breathing after %.1fs of inactivity", idle_for)
@@ -780,7 +802,7 @@ class MovementManager:
             self.current_robot.goto_target(
                 head=neutral_head_pose,
                 antennas=neutral_antennas,
-                duration=2.0,
+                duration=NEUTRAL_GOTO_DURATION_S,
                 body_yaw=neutral_body_yaw,
             )
 
@@ -833,7 +855,7 @@ class MovementManager:
 
         loop_count = 0
         prev_loop_start = self._now()
-        print_interval_loops = max(1, int(self.target_frequency * 2))
+        print_interval_loops = max(1, int(self.target_frequency * FREQUENCY_LOG_INTERVAL_MULTIPLIER))
         freq_stats = self._freq_stats
 
         while not self._stop_event.is_set():
