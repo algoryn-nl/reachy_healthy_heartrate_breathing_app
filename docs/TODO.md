@@ -8,7 +8,7 @@
 
 ### Upcoming — High Priority
 
-- [ ] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch)
+- [x] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch) — 60 new tests across 10 test classes covering receive (mono/stereo/resample/error), emit idle logic (mmWave/non-mmWave/policy gating), send_idle_signal, event loop routing (speech/cost/audio/transcript/tool dispatch/error events), shutdown, apply_personality, restart_session, misc helpers, and API key persistence; also fixed scipy float64 resample bug in receive() (2026-02-24)
 - [x] Fix antenna blending race condition — false positive; only real issue was `get_status()` reading `_is_listening` off-thread, fixed to use `_shared_is_listening` (2026-02-24)
 - [x] Fix session setup exception handling gap (openai_realtime.py:415-417) (2026-02-24)
 
@@ -32,6 +32,7 @@
 
 ### Done
 
+- [x] Add test coverage for openai_realtime.py — 71 total tests (60 new) covering all public methods: receive (mono/stereo/resample), emit (idle logic with mmWave/non-mmWave policy gating), send_idle_signal, full event loop routing, shutdown cleanup, apply_personality, restart_session, helpers, API key persistence; fixed scipy float64 resample bug in receive() (2026-02-24)
 - [x] Graceful degradation when mmWave sensor disconnects mid-session — error tracking in IdlePolicy (record_error, consecutive error counter, backoff suppression), error propagation through ToolDispatcher to sensor_state, dashboard shows "Disconnected" chip + error banner, stale data detection (2026-02-24)
 - [x] Improve serial port auto-detection with VID/PID + HELLO probe (2026-02-23)
 - [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
@@ -58,13 +59,14 @@
 - Locked profile pattern: app always uses `_healthy_heartrate_breathing_locked_profile` (2026-02-23)
 - IdlePolicy + LightOrchestrator extracted as first phase of handler decomposition (2026-02-23)
 - Lux extraction paths in env_utils.py verified against mmWave output: all 4 paths (measure/scan x latest_light/light_summary) match (2026-02-24)
+- scipy.signal.resample returns float64 from int16 input; fastrtc's audio_to_int16 only accepts int16/float32 — fixed by casting to float32 after resample in receive() (2026-02-24)
 - COBS + CRC-16 binary protocol chosen for mmWave: compact, checksummed, no framing ambiguity
 
 ### Technical Debt
 
 - `_run_realtime_session()` decomposition complete — 5 handler classes extracted (IdlePolicy, LightOrchestrator, TranscriptHandler, ToolDispatcher, AudioRouter)
 - ~~Tool registry initializes at import time with disk I/O and potential `sys.exit(1)`~~ (fixed: lazy init + ToolRegistryError, 2026-02-24)
-- Test coverage inversely correlates with module size (`openai_realtime.py` worst)
+- ~~Test coverage inversely correlates with module size (`openai_realtime.py` worst)~~ (fixed: comprehensive test coverage added for openai_realtime.py, 2026-02-24)
 
 ### Recurring Issues & Solutions
 

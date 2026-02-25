@@ -513,6 +513,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Resample if needed
         if self.input_sample_rate != input_sample_rate:
             audio_frame = resample(audio_frame, int(len(audio_frame) * self.input_sample_rate / input_sample_rate))
+            # scipy.signal.resample returns float64; fastrtc expects float32 or int16
+            audio_frame = audio_frame.astype(np.float32)
 
         # Cast if needed
         audio_frame = audio_to_int16(audio_frame)
