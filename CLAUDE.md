@@ -404,6 +404,7 @@ Key configuration (see `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
+| `HEALTHY_LIGHT_CONTEXT_ENABLED` | `true` | Enable/disable light context tool entirely |
 | `HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED` | `true` | Auto-invoke light context after mmWave |
 | `HEALTHY_LIGHT_ANALYTICS_ENABLED` | `true` | Enable JSONL analytics logging |
 | `HEALTHY_LIGHT_CONTEXT_USER_ID` | `default` | User ID for per-user baseline tracking |
@@ -441,7 +442,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (282 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (284 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

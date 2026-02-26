@@ -39,6 +39,8 @@ Vitals gating: heart/breath rates only reported when single-target, still, not h
 
 Serial port resolution order: explicit parameter, `MMWAVE_SERIAL_PORT` env var, three-tier auto-detection (VID/PID `0x303A:0x1001` for Seeed XIAO ESP32, glob fallback to `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, HELLO probe to disambiguate multiple candidates).
 
+Protocol version handshake: at session start, `_handshake_version()` sends `CMD_PING` and validates the first response frame's version byte, returning `status: "version_mismatch"` on mismatch or timeout. Defense-in-depth: mismatched frames are also drop-and-warned in the main polling loop.
+
 ### 3. Ambient Light Context
 
 Classifies ambient environment based on lux level, time of day, and user preferences. Outputs a `context_state` and `recommended_mode` the conversation model uses to adapt tone.
@@ -56,6 +58,8 @@ Calm periodic mmWave probing when the robot is idle:
 - Escalating to physical head sweep after N consecutive misses
 - Sweep cooldown to prevent repetitive scanning
 - Post-focus quiet window suppresses probes after a confirmed target
+- **Disconnect handling**: consecutive sensor errors tracked; after configurable threshold, probing suppressed with backoff before retry; auto-recovery on successful communication
+- **Multi-target awareness**: when >1 target detected, probe interval multiplied (default 2x via `HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER`), scan-only mode used (measure phase skipped since vitals require single person), system prompt guides LLM to avoid private health topics
 - All timings configurable via `HEALTHY_MM_WAVE_*` env vars
 
 ### 5. Movement System
@@ -109,7 +113,7 @@ All configuration via environment variables. See `.env.example` for defaults and
 
 ## Dependencies
 
-- Python >=3.10 (mypy targets 3.12)
+- Python >=3.12
 - Core: `reachy_mini`, `fastrtc`, `openai`, `gradio`, `pyserial`, `eclipse-zenoh`
 - Optional vision: `torch`, `transformers`, `ultralytics` (via `yolo_vision` extra)
 - Dev: `pytest`, `pytest-asyncio`, `ruff`, `mypy`, `pre-commit`

@@ -45,6 +45,8 @@ When the robot has no active conversation, an `IdlePolicy` state machine control
 
 When the sensor disconnects (USB unplug, serial errors), the policy tracks consecutive errors and suppresses probing after a configurable threshold, backing off for `error_backoff_s` seconds before retrying. Successful communication resets the error counter automatically.
 
+When multiple targets are detected (`max_target_count > 1`), the policy backs off probing (interval multiplied by `HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER`, default 2x) and switches to scan-only mode (skipping the measure phase since vitals require a single stationary person). A protocol version handshake at session start (`CMD_PING` → version byte validation) fails fast on firmware/host mismatch.
+
 ```
     WAITING (idle timer not met or robot moving)
         │
@@ -80,6 +82,7 @@ When the sensor disconnects (USB unplug, serial errors), the policy tracks conse
 | `HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S` | 45.0 | Quiet window after target found |
 | `HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION` | 3 | Consecutive errors before suppression |
 | `HEALTHY_MM_WAVE_ERROR_BACKOFF_S` | 120.0 | Seconds to wait before retry after suppression |
+| `HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER` | 2.0 | Probe interval multiplier when multi-target active |
 
 Full state diagram and transition details in `idle_policy.py` module docstring.
 
@@ -135,7 +138,9 @@ The mmWave firmware speaks a COBS-framed binary protocol over serial at 115200 b
 | Version | 1 byte | Protocol version (currently 1) |
 | Message type | 1 byte | Command or event type |
 | Sequence number | 2 bytes | TX sequence counter (little-endian) |
+| Payload length | 2 bytes | Byte count of payload (little-endian) |
 | Payload | variable | Type-specific data |
+| CRC-16 | 2 bytes | CRC-16/CCITT-FALSE over all preceding fields |
 
 Encoding and decoding is handled by `mmwave_protocol.py`. The tool sends configuration commands (set heartbeat mode, focus cluster, report intervals) and receives event frames (targets, bio, state, light).
 
@@ -174,10 +179,10 @@ src/healthy_heartrate_breathing/
   config.py                 -- app configuration (env vars, profile selection)
   env_utils.py              -- shared coercion & env-var helpers
   openai_realtime.py        -- WebSocket lifecycle, reconnection, session orchestration
-  audio_router.py           -- mic/speaker frame routing (resample, emit audio deltas)
+  audio_router.py           -- receive/emit: decode base64 audio deltas, feed head wobbler, enqueue output
   idle_policy.py            -- idle detection state machine, mmWave probe scheduling
   tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, and sensor state extraction
-  transcript_handler.py     -- conversation transcript capture and formatting
+  transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
   light_orchestrator.py     -- auto-invokes light context after mmWave lux data
   tools/
     core_tools.py           -- Tool base class, registry, dispatcher
