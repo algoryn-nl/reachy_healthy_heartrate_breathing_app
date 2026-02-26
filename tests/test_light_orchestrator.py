@@ -241,6 +241,219 @@ class TestBaselinePruning:
         assert o._baseline_dirty is False
 
 
+# ---------------------------------------------------------------------------
+# File I/O error tests for persistence (corrupted JSON, permissions, edge cases)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadBaselineCorruptedJson:
+    """Verify load_baseline gracefully handles corrupted or malformed JSON files."""
+
+    def test_invalid_json_falls_back_to_default(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text("{this is not json", encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+    def test_empty_file_falls_back_to_default(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text("", encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+    def test_json_array_falls_back_to_default(self, tmp_path: Path) -> None:
+        """Top-level JSON is a list, not a dict."""
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text("[1, 2, 3]", encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+    def test_json_scalar_falls_back_to_default(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text("42", encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+    def test_json_null_falls_back_to_default(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text("null", encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+    def test_dict_with_non_dict_users_gets_repaired(self, tmp_path: Path) -> None:
+        """JSON is a dict but 'users' is a string — should be replaced with empty dict."""
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps({"schema_version": 1, "users": "not-a-dict"}), encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert isinstance(o._baseline_state["users"], dict)
+        assert o._baseline_state["users"] == {}
+
+    def test_dict_without_users_key_gets_repaired(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state["users"] == {}
+
+    def test_truncated_json_falls_back_to_default(self, tmp_path: Path) -> None:
+        """Simulate a file that was truncated mid-write."""
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text('{"schema_version": 1, "users": {"test": {', encoding="utf-8")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+    def test_binary_garbage_falls_back_to_default(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_bytes(b"\x00\x01\x80\xff\xfe")
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+
+class TestLoadBaselinePermissions:
+    """Verify load_baseline handles permission errors gracefully."""
+
+    def test_unreadable_file_falls_back_to_default(self, tmp_path: Path) -> None:
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps({"schema_version": 1, "users": {}}), encoding="utf-8")
+        baseline_path.chmod(0o000)
+        try:
+            o = _orchestrator(tmp_path)
+            assert o._baseline_state == {"schema_version": 1, "users": {}}
+        finally:
+            baseline_path.chmod(0o644)
+
+    def test_nonexistent_file_uses_default(self, tmp_path: Path) -> None:
+        """Baseline path set but file does not exist yet — normal first-run case."""
+        o = _orchestrator(tmp_path)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+        assert not (tmp_path / "baseline.json").exists()
+
+    def test_none_baseline_path_uses_default(self, tmp_path: Path) -> None:
+        o = _orchestrator(tmp_path, baseline_path=None)
+        assert o._baseline_state == {"schema_version": 1, "users": {}}
+
+
+class TestWriteBaselinePermissions:
+    """Verify _write_baseline and flush handle write errors gracefully."""
+
+    def test_write_failure_keeps_dirty_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        o = _orchestrator(tmp_path)
+        o.update_baseline(lux=100.0, local_hour=12)
+        assert o._baseline_dirty is False  # first write succeeds
+
+        # Simulate write failure by patching write_text to raise
+        o._baseline_dirty = True
+
+        def _fail_write(*_a: object, **_kw: object) -> None:
+            raise PermissionError("mock permission denied")
+
+        baseline_path = o.baseline_path
+        assert baseline_path is not None
+        monkeypatch.setattr(type(baseline_path), "write_text", _fail_write)
+        o._write_baseline(0.0)
+        # dirty flag stays True because write failed
+        assert o._baseline_dirty is True
+
+    def test_write_creates_parent_dirs(self, tmp_path: Path) -> None:
+        nested_path = tmp_path / "deep" / "nested" / "baseline.json"
+        o = _orchestrator(tmp_path, baseline_path=nested_path)
+        o.update_baseline(lux=100.0, local_hour=12)
+        assert nested_path.exists()
+        parsed = json.loads(nested_path.read_text(encoding="utf-8"))
+        assert "users" in parsed
+
+    def test_flush_failure_does_not_raise(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        o = _orchestrator(tmp_path)
+        o.update_baseline(lux=50.0, local_hour=10)
+
+        # Dirty it and simulate write failure
+        o._baseline_dirty = True
+
+        def _fail_write(*_a: object, **_kw: object) -> None:
+            raise OSError("mock disk full")
+
+        baseline_path = o.baseline_path
+        assert baseline_path is not None
+        monkeypatch.setattr(type(baseline_path), "write_text", _fail_write)
+        # flush should not raise
+        o.flush()
+        assert o._baseline_dirty is True
+
+
+class TestAnalyticsPermissions:
+    """Verify analytics JSONL writing handles errors gracefully."""
+
+    def test_analytics_write_to_unwritable_dir_does_not_raise(self, tmp_path: Path) -> None:
+        readonly_dir = tmp_path / "analytics_locked"
+        readonly_dir.mkdir()
+        analytics_path = readonly_dir / "analytics.jsonl"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path)
+
+        # First write should succeed
+        o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "bright"})
+        assert analytics_path.exists()
+
+        readonly_dir.chmod(0o555)
+        try:
+            # Should not raise
+            o._append_analytics_event(source_tool="test", lux=200.0, result={"context_state": "dim"})
+        finally:
+            readonly_dir.chmod(0o755)
+
+    def test_analytics_creates_parent_dirs(self, tmp_path: Path) -> None:
+        nested_path = tmp_path / "logs" / "deep" / "analytics.jsonl"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=nested_path)
+        o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "bright"})
+        assert nested_path.exists()
+        line = nested_path.read_text(encoding="utf-8").strip()
+        parsed = json.loads(line)
+        assert parsed["lux"] == 100.0
+
+    def test_analytics_disabled_no_write(self, tmp_path: Path) -> None:
+        analytics_path = tmp_path / "analytics.jsonl"
+        o = _orchestrator(tmp_path, analytics_enabled=False, analytics_path=analytics_path)
+        o._append_analytics_event(source_tool="test", lux=100.0, result={})
+        assert not analytics_path.exists()
+
+
+class TestPruneStaleEdgeCases:
+    """Edge cases in _prune_stale_users for non-dict user entries."""
+
+    def test_non_dict_user_entry_pruned(self, tmp_path: Path) -> None:
+        state = {
+            "schema_version": 1,
+            "users": {
+                "string-entry": "not-a-dict",
+                "list-entry": [1, 2, 3],
+                "null-entry": None,
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state), encoding="utf-8")
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert "string-entry" not in o._baseline_state["users"]
+        assert "list-entry" not in o._baseline_state["users"]
+        assert "null-entry" not in o._baseline_state["users"]
+
+    def test_empty_users_dict_no_error(self, tmp_path: Path) -> None:
+        state = {"schema_version": 1, "users": {}}
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state), encoding="utf-8")
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert o._baseline_state["users"] == {}
+
+    def test_user_entry_missing_updated_at_pruned(self, tmp_path: Path) -> None:
+        state = {
+            "schema_version": 1,
+            "users": {
+                "no-timestamp": {"hours": {"12": {"ema_lux": 100.0, "samples": 1}}},
+            },
+        }
+        baseline_path = tmp_path / "baseline.json"
+        baseline_path.write_text(json.dumps(state), encoding="utf-8")
+        o = _orchestrator(tmp_path, baseline_max_age_days=90)
+        assert "no-timestamp" not in o._baseline_state["users"]
+
+
 class TestRunFromMmwave:
     @pytest.mark.asyncio
     async def test_disabled_returns_none(self, tmp_path: Path) -> None:
