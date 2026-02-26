@@ -69,7 +69,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 | Handler | File | Responsibility |
 |---------|------|----------------|
 | `AudioRouter` | `audio_router.py` | receive/emit: decode base64 audio deltas, feed head wobbler, enqueue output |
-| `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity (state diagram in module docstring) |
+| `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity; multi-target aware (backs off probing, suggests scan-only when >1 target) (state diagram in module docstring) |
 | `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()` |
 | `TranscriptHandler` | `transcript_handler.py` | Partial transcript debouncing (configurable delay) and completed transcript output routing |
 | `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data; owns baseline persistence and analytics |
@@ -398,6 +398,7 @@ Key configuration (see `.env.example`):
 | `HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S` | `45.0` | Quiet window after confirmed target (seconds) |
 | `HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION` | `3` | Consecutive sensor errors before suppressing probes |
 | `HEALTHY_MM_WAVE_ERROR_BACKOFF_S` | `120.0` | Seconds to wait before retry after error suppression |
+| `HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER` | `2.0` | Probe interval multiplier when multi-target is active |
 
 ### Light Context Policy
 
@@ -440,7 +441,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (271 tests total; includes protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (282 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

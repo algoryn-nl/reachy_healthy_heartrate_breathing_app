@@ -12,6 +12,7 @@
 
 ### Done
 
+- [x] Multi-person tracking logic — IdlePolicy multi-target awareness (record_multi_target, suggest_scan_only, configurable interval multiplier), ToolDispatcher routing, scan-only idle mode, system prompt hint; 11 new tests (2026-02-26)
 - [x] Protocol version handshake rejection — `_handshake_version()` sends CMD_PING at session start, validates first frame's version byte, returns version_mismatch error on failure; 6 new tests (2026-02-26)
 - [x] Bio rate boundary condition tests — 22 tests for decode at firmware guard rails (BR 4–30, HR 35–200), null sentinels, wire edge cases, tool acceptance gate (2026-02-26)
 - [x] LightOrchestrator file I/O error tests — 21 tests for corrupted/truncated/binary JSON, non-dict repair, permission errors on read/write/flush, analytics write failures, prune edge cases (2026-02-26)
