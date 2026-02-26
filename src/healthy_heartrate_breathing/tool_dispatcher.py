@@ -143,6 +143,82 @@ def _mmwave_is_multi_target(result: Any) -> bool:
     return isinstance(max_count, int) and max_count > 1
 
 
+# -- Device state context enrichment ------------------------------------------
+
+_STATE_INFO: dict[str, tuple[str, str]] = {
+    "RESTING_VITALS": (
+        "high",
+        "Person is still and close — ideal for heart rate and breathing measurement.",
+    ),
+    "STILL_NEAR": (
+        "moderate",
+        "Person is close and settling. Wait for RESTING_VITALS for most reliable readings.",
+    ),
+    "MOVING": (
+        "low",
+        "Person is moving — vitals readings may be inaccurate.",
+    ),
+    "PRESENT_FAR": (
+        "unavailable",
+        "Person detected but too far for vitals measurement.",
+    ),
+    "MULTI_TARGET": (
+        "unavailable",
+        "Multiple people detected — cannot isolate vitals.",
+    ),
+    "NO_TARGET": (
+        "unavailable",
+        "No person detected.",
+    ),
+}
+
+_TRANSITION_SUFFIXES: dict[str, str] = {
+    "RESTING_VITALS": "now in ideal position for vitals.",
+    "STILL_NEAR": "vitals measurement should improve soon.",
+    "MOVING": "movement may affect vitals accuracy.",
+    "PRESENT_FAR": "person moved out of vitals range.",
+    "MULTI_TARGET": "multiple people now detected.",
+    "NO_TARGET": "person left the area.",
+}
+
+
+def build_device_context(sensor_state: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a device-context dict from sensor state for LLM consumption.
+
+    Returns ``None`` when no device state is available (error/disconnect).
+    """
+    current = sensor_state.get("device_state")
+    if current is None:
+        return None
+
+    previous: str | None = sensor_state.get("previous_device_state")
+    changed = previous is not None and previous != current
+
+    info = _STATE_INFO.get(current)
+    if info is not None:
+        reliability, note = info
+    else:
+        reliability = "unknown"
+        note = f"Unrecognised device state: {current}."
+
+    transition: str | None = None
+    if changed:
+        suffix = _TRANSITION_SUFFIXES.get(current, f"state is now {current}.")
+        if previous == "NO_TARGET":
+            transition = f"{previous} → {current} — someone just arrived; {suffix}"
+        else:
+            transition = f"{previous} → {current} — {suffix}"
+
+    return {
+        "state": current,
+        "previous_state": previous,
+        "changed": changed,
+        "vitals_reliability": reliability,
+        "transition": transition,
+        "note": note,
+    }
+
+
 class ToolDispatcher:
     """Dispatches tool calls, integrating idle policy and light orchestration.
 

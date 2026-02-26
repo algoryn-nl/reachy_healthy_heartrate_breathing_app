@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from healthy_heartrate_breathing.idle_policy import IdlePolicy
-from healthy_heartrate_breathing.tool_dispatcher import ToolDispatcher
+from healthy_heartrate_breathing.tool_dispatcher import ToolDispatcher, build_device_context
 from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
 
 
@@ -388,3 +388,91 @@ class TestMultiTargetRouting:
         await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-st", is_idle=True)
         assert policy.last_focus_time is not None
         assert policy.last_multi_target_time is None
+
+
+class TestBuildDeviceContext:
+    def test_resting_vitals_returns_high_reliability(self) -> None:
+        state = {"device_state": "RESTING_VITALS", "previous_device_state": "RESTING_VITALS"}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["state"] == "RESTING_VITALS"
+        assert ctx["vitals_reliability"] == "high"
+        assert ctx["changed"] is False
+        assert ctx["transition"] is None
+
+    def test_still_near_returns_moderate_reliability(self) -> None:
+        state = {"device_state": "STILL_NEAR", "previous_device_state": "STILL_NEAR"}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["vitals_reliability"] == "moderate"
+
+    def test_moving_returns_low_reliability(self) -> None:
+        state = {"device_state": "MOVING", "previous_device_state": "MOVING"}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["vitals_reliability"] == "low"
+
+    def test_present_far_returns_unavailable(self) -> None:
+        state = {"device_state": "PRESENT_FAR", "previous_device_state": None}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["vitals_reliability"] == "unavailable"
+
+    def test_multi_target_returns_unavailable(self) -> None:
+        state = {"device_state": "MULTI_TARGET", "previous_device_state": None}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["vitals_reliability"] == "unavailable"
+
+    def test_no_target_returns_unavailable(self) -> None:
+        state = {"device_state": "NO_TARGET", "previous_device_state": None}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["vitals_reliability"] == "unavailable"
+
+    def test_unknown_state_returns_unknown_reliability(self) -> None:
+        state = {"device_state": "UNKNOWN_7", "previous_device_state": None}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["vitals_reliability"] == "unknown"
+        assert "UNKNOWN_7" in ctx["note"]
+
+    def test_missing_device_state_returns_none(self) -> None:
+        state = {"previous_device_state": None}
+        assert build_device_context(state) is None
+
+    def test_none_device_state_returns_none(self) -> None:
+        state = {"device_state": None, "previous_device_state": None}
+        assert build_device_context(state) is None
+
+    def test_changed_true_when_state_differs(self) -> None:
+        state = {"device_state": "STILL_NEAR", "previous_device_state": "MOVING"}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["changed"] is True
+        assert ctx["previous_state"] == "MOVING"
+        assert ctx["transition"] is not None
+        assert "MOVING" in ctx["transition"]
+        assert "STILL_NEAR" in ctx["transition"]
+
+    def test_first_call_previous_none_changed_false(self) -> None:
+        state = {"device_state": "STILL_NEAR", "previous_device_state": None}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["changed"] is False
+        assert ctx["previous_state"] is None
+        assert ctx["transition"] is None
+
+    def test_transition_no_target_to_present(self) -> None:
+        state = {"device_state": "PRESENT_FAR", "previous_device_state": "NO_TARGET"}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["changed"] is True
+        assert "arrived" in ctx["transition"].lower() or "just" in ctx["transition"].lower()
+
+    def test_transition_to_no_target(self) -> None:
+        state = {"device_state": "NO_TARGET", "previous_device_state": "STILL_NEAR"}
+        ctx = build_device_context(state)
+        assert ctx is not None
+        assert ctx["changed"] is True
+        assert "left" in ctx["transition"].lower()
