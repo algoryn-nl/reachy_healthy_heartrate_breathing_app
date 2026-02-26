@@ -9,6 +9,7 @@ from typing import Iterable
 from pathlib import Path
 
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    PROTO_VERSION,
     ProtocolError,
     decode_event,
     decode_frame,
@@ -42,19 +43,25 @@ def _format_pretty(event: dict, msg_type: int, seq: int) -> str:
     if evt_type == "bio":
         return (
             f"seq={seq} type=bio allowed={event.get('allowed')} valid={event.get('valid')} "
-            f"br={event.get('br')} hr={event.get('hr')}"
+            f"br={event.get('br')} hr={event.get('hr')} "
+            f"br_new={event.get('br_new')} hr_new={event.get('hr_new')}"
         )
     if evt_type == "state":
         return (
             f"seq={seq} type=state state={event.get('state')} pose={event.get('pose')} "
-            f"human={event.get('human')} n_targets={event.get('n_targets')} dist_cm={event.get('dist_cm')}"
+            f"human={event.get('human')} n_targets={event.get('n_targets')} dist_cm={event.get('dist_cm')} "
+            f"head_moving={event.get('head_moving')} dist_new={event.get('dist_new')}"
         )
     if evt_type == "light":
         return f"seq={seq} type=light valid={event.get('valid')} lux={event.get('lux')}"
+    if evt_type == "pong":
+        return f"seq={seq} type=pong t_ms={event.get('t_ms')}"
+    if evt_type == "hello":
+        return f"seq={seq} type=hello proto_version={event.get('proto_version')} feature_bits=0x{event.get('feature_bits', 0):04X}"
     if evt_type == "ack":
-        return f"seq={seq} type=ack cmd={event.get('cmd_id')} status={event.get('status_code')} value={event.get('value')}"
+        return f"seq={seq} type=ack cmd=0x{event.get('cmd_id', 0):02X} status={event.get('status_code')} value={event.get('value')}"
     if evt_type == "err":
-        return f"seq={seq} type=err cmd={event.get('cmd_id')} err={event.get('err_code')}"
+        return f"seq={seq} type=err cmd=0x{event.get('cmd_id', 0):02X} err={event.get('err_code')}"
     return f"seq={seq} msg_type=0x{msg_type:02X} event={event}"
 
 
@@ -76,7 +83,7 @@ def _consume_bytes(buffer: bytearray, data: bytes, fmt: str, show_bad_frames: bo
                 print(f"[bad-frame] {exc}", file=sys.stderr)
             continue
 
-        if version != 1:
+        if version != PROTO_VERSION:
             if show_bad_frames:
                 print(f"[bad-frame] unsupported version {version}", file=sys.stderr)
             continue
