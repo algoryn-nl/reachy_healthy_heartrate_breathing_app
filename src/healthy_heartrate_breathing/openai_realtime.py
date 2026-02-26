@@ -670,22 +670,25 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             sweep_allowed = self.idle_policy.sweep_allowed(now)
             strategy = self.idle_policy.build_strategy_message(sweep_allowed)
             sweep_flag = "true" if sweep_allowed else "false"
+            scan_only = self.idle_policy.suggest_scan_only
+            idle_mode = "scan" if scan_only else "locate_and_measure"
             timestamp_msg = (
                 f"[Idle time update: {self.format_timestamp()} - No activity for {idle_duration:.1f}s] "
                 "Do one calm wellness scan cycle."
             )
             idle_instructions = (
                 "You MUST respond with function calls only - no speech or text. "
-                f"Call mmWave exactly once with mode='locate_and_measure', duration_s={self.idle_policy.probe_duration_s}, "
-                f"sweep_if_unseen={sweep_flag}. Then stop. "
+                f"Call mmWave exactly once with mode='{idle_mode}', duration_s={self.idle_policy.probe_duration_s}, "
+                f"{'sweep_if_unseen=' + sweep_flag + '. ' if not scan_only else ''}Then stop. "
                 f"Current strategy: {strategy}. "
                 "Do not call dance, play_emotion, or sweep_look for this idle cycle."
             )
             logger.info(
-                "Idle schedule: mmWave probe (misses=%d/%d, sweep_allowed=%s)",
+                "Idle schedule: mmWave probe (misses=%d/%d, sweep_allowed=%s, scan_only=%s)",
                 self.idle_policy.consecutive_misses,
                 self.idle_policy.misses_before_sweep,
                 sweep_allowed,
+                scan_only,
             )
         else:
             timestamp_msg = (

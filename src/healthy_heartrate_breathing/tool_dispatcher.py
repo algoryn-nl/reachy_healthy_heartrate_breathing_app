@@ -264,7 +264,7 @@ class ToolDispatcher:
                 now = asyncio.get_event_loop().time()
                 idle_args = _safe_parse_args(args_json)
                 idle_mmwave_sweep_used = self._idle_policy.sweep_allowed(now)
-                idle_args["mode"] = "locate_and_measure"
+                idle_args["mode"] = "scan" if self._idle_policy.suggest_scan_only else "locate_and_measure"
                 idle_args["duration_s"] = self._idle_policy.probe_duration_s
                 idle_args["sweep_if_unseen"] = idle_mmwave_sweep_used
                 effective_args_json = json.dumps(idle_args)
