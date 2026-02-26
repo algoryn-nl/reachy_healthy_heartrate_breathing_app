@@ -20,8 +20,8 @@ dev = [ "pytest", "pytest-asyncio", "ruff==0.12.0", "mypy==1.18.2", "pre-commit"
 reachy_mini_wireless = [ "PyGObject>=3.42.2,<=3.46.0", "gst-signalling>=1.1.2",]
 local_vision = [ "torch>=2.1", "transformers==5.0.0rc2", "num2words",]
 yolo_vision = [ "ultralytics", "supervision",]
-mediapipe_vision = [ "mediapipe==0.10.14",]
-all_vision = [ "torch>=2.1", "transformers==5.0.0rc2", "num2words", "ultralytics", "supervision", "mediapipe==0.10.14",]
+mediapipe_vision = [ "mediapipe>=0.10.30",]
+all_vision = [ "torch>=2.1", "transformers==5.0.0rc2", "num2words", "ultralytics", "supervision", "mediapipe>=0.10.30",]
 
 [project.scripts]
 healthy-heartrate-breathing = "healthy_heartrate_breathing.main:main"
