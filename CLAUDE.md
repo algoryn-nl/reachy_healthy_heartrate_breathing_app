@@ -328,8 +328,8 @@ tests/
   test_external_loading.py  -- external tool/profile loading tests
   test_idle_policy.py       -- IdlePolicy state machine tests
   test_light_context.py     -- light_context tool classification tests
-  test_light_orchestrator.py -- LightOrchestrator integration tests
-  test_mmwave.py            -- mmWave protocol and tool tests
+  test_light_orchestrator.py -- LightOrchestrator baseline tracking, dispatch, corrupted JSON / permission error handling
+  test_mmwave.py            -- mmWave protocol, tool integration, bio rate boundary conditions, acceptance gate
   test_openai_realtime.py   -- OpenaiRealtimeHandler tests (receive, emit, idle, event loop, shutdown, personality, cost tracking)
   test_tool_dispatcher.py   -- ToolDispatcher dispatch, timeout, sensor extraction tests
   test_transcript_handler.py -- TranscriptHandler debouncing tests
@@ -439,7 +439,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (71 tests covering receive, emit, idle, event loop routing, shutdown, personality, cost tracking)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (265 tests total; includes bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

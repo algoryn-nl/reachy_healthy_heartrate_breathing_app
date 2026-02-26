@@ -6,34 +6,33 @@
 
 (nothing actively in-progress)
 
-### Upcoming — High Priority
+### Upcoming
 
-- [x] Add test coverage for openai_realtime.py (emit, receive, idle, tool dispatch) — 60 new tests across 10 test classes covering receive (mono/stereo/resample/error), emit idle logic (mmWave/non-mmWave/policy gating), send_idle_signal, event loop routing (speech/cost/audio/transcript/tool dispatch/error events), shutdown, apply_personality, restart_session, misc helpers, and API key persistence; also fixed scipy float64 resample bug in receive() (2026-02-24)
+(all planned items complete — see roadmap for future vision)
+
+### Done
+
+- [x] Bio rate boundary condition tests — 22 tests for decode at firmware guard rails (BR 4–30, HR 35–200), null sentinels, wire edge cases, tool acceptance gate (2026-02-26)
+- [x] LightOrchestrator file I/O error tests — 21 tests for corrupted/truncated/binary JSON, non-dict repair, permission errors on read/write/flush, analytics write failures, prune edge cases (2026-02-26)
+- [x] Add test coverage for openai_realtime.py — 71 total tests (60 new) covering all public methods: receive (mono/stereo/resample), emit (idle logic with mmWave/non-mmWave policy gating), send_idle_signal, full event loop routing, shutdown cleanup, apply_personality, restart_session, helpers, API key persistence; fixed scipy float64 resample bug in receive() (2026-02-24)
+- [x] Graceful degradation when mmWave sensor disconnects mid-session — error tracking in IdlePolicy (record_error, consecutive error counter, backoff suppression), error propagation through ToolDispatcher to sensor_state, dashboard shows "Disconnected" chip + error banner, stale data detection (2026-02-24)
 - [x] Fix antenna blending race condition — false positive; only real issue was `get_status()` reading `_is_listening` off-thread, fixed to use `_shared_is_listening` (2026-02-24)
-- [x] Fix session setup exception handling gap (openai_realtime.py:415-417) (2026-02-24)
-
-### Upcoming — Medium Priority
-
-- [x] Reset idle tool call flag on exception path (openai_realtime.py:538-583) (2026-02-24)
+- [x] Fix session setup exception handling gap — try/finally around event loop clears connection + connected_event (2026-02-24)
+- [x] Reset idle tool call flag on exception path in emit() (2026-02-24)
+- [x] Add receive() connection guard regression test (2026-02-24)
+- [x] Add baseline pruning to LightOrchestrator (unbounded per-hour growth) (2026-02-24)
+- [x] Use `decimal.Decimal` for cost tracking — eliminates float precision loss over long sessions (2026-02-24)
+- [x] Extract magic numbers in moves.py to named constants (2026-02-24)
+- [x] Remove dead commented-out code in HeadWobbler (2026-02-24)
+- [x] Document IdlePolicy state transitions with state diagram (2026-02-24)
+- [x] Surface unused BIO state field and targets truncation flag in scan/measure results + sensor dashboard (2026-02-24)
 - [x] Refactor tool registry to lazy init — no disk I/O or sys.exit at import time (2026-02-24)
 - [x] Validate tool loading matches tools.txt — warns on unregistered tool names (2026-02-24)
 - [x] Pin Gradio to stable version — `>=5.50.0` replaces dev pin (2026-02-24)
 - [x] Add mypy coverage for tests/ (2026-02-24)
 - [x] Align requires-python to `>=3.12` matching mypy target and actual runtime (2026-02-24)
-
-### Upcoming — Low Priority
-
-- [x] Add baseline pruning to LightOrchestrator (unbounded per-hour growth) (2026-02-24)
-- [x] Use `decimal.Decimal` for cost tracking (openai_realtime.py:43-55) — cost constants and accumulator converted to Decimal; eliminates float precision loss over long sessions (2026-02-24)
-- [x] Extract magic numbers in moves.py to named constants (lines 266-282) — BreathingMove params, neutral goto duration, and telemetry log interval extracted as documented module-level constants (2026-02-24)
-- [x] Remove dead commented-out code in HeadWobbler (head_wobbler.py:149-157) (2026-02-24)
-- [x] Document IdlePolicy state transitions with state diagram — full state diagram, transition table, and parameter reference in `idle_policy.py` module docstring; summary in README.md and CLAUDE.md (2026-02-24)
-- [x] Surface unused BIO state field and targets truncation flag (mmWave.py) — `device_state`, `max_target_count`, `targets_truncated` surfaced in scan/measure results; sensor dashboard added to headless UI with `/sensor` REST endpoint (2026-02-24)
-
-### Done
-
-- [x] Add test coverage for openai_realtime.py — 71 total tests (60 new) covering all public methods: receive (mono/stereo/resample), emit (idle logic with mmWave/non-mmWave policy gating), send_idle_signal, full event loop routing, shutdown cleanup, apply_personality, restart_session, helpers, API key persistence; fixed scipy float64 resample bug in receive() (2026-02-24)
-- [x] Graceful degradation when mmWave sensor disconnects mid-session — error tracking in IdlePolicy (record_error, consecutive error counter, backoff suppression), error propagation through ToolDispatcher to sensor_state, dashboard shows "Disconnected" chip + error banner, stale data detection (2026-02-24)
+- [x] Verify lux extraction paths match mmWave output — confirmed correct, added regression tests (2026-02-24)
+- [x] Throttle light baseline saves with dirty flag + 60s interval, flush at shutdown (2026-02-24)
 - [x] Improve serial port auto-detection with VID/PID + HELLO probe (2026-02-23)
 - [x] Skip NaN targets in emitTargets() firmware (2026-02-23)
 - [x] Advertise light sensor status in HELLO feature bits (2026-02-23)
@@ -45,11 +44,6 @@
 - [x] Consolidate duplicated utility functions into env_utils.py (2026-02-23)
 - [x] Add mmWave env tuning defaults (2026-02-23)
 - [x] Non-blocking tool dispatch with timeout, semaphore, and cancellation (2026-02-23)
-- [x] Verify lux extraction paths match mmWave output — confirmed correct, added regression tests (2026-02-24)
-- [x] Throttle light baseline saves with dirty flag + 60s interval, flush at shutdown (2026-02-24)
-- [x] Fix session setup exception handling gap — try/finally around event loop clears connection + connected_event (2026-02-24)
-- [x] Reset idle tool call flag on exception path in emit() (2026-02-24)
-- [x] Add receive() connection guard regression test (2026-02-24)
 
 ## Notes
 
@@ -66,7 +60,8 @@
 
 - `_run_realtime_session()` decomposition complete — 5 handler classes extracted (IdlePolicy, LightOrchestrator, TranscriptHandler, ToolDispatcher, AudioRouter)
 - ~~Tool registry initializes at import time with disk I/O and potential `sys.exit(1)`~~ (fixed: lazy init + ToolRegistryError, 2026-02-24)
-- ~~Test coverage inversely correlates with module size (`openai_realtime.py` worst)~~ (fixed: comprehensive test coverage added for openai_realtime.py, 2026-02-24)
+- ~~Test coverage inversely correlates with module size (`openai_realtime.py` worst)~~ (fixed: comprehensive test coverage added, 2026-02-24)
+- All planned testing gaps closed: bio rate boundaries, LightOrchestrator file I/O errors, openai_realtime.py coverage (2026-02-26)
 
 ### Recurring Issues & Solutions
 
