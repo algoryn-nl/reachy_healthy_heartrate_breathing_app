@@ -15,6 +15,7 @@ from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave import MmWave
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
     EVT_BIO,
+    CMD_PING,
     EVT_PONG,
     EVT_HELLO,
     EVT_LIGHT,
@@ -35,6 +36,11 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     crc16_ccitt_false,
     extract_encoded_frames,
 )
+
+
+# A valid PONG frame at the current PROTO_VERSION, used by _patch_serial_modules
+# to satisfy the handshake that runs at the start of every run_session() call.
+_HANDSHAKE_PONG = bytes(encode_frame(EVT_PONG, struct.pack("<I", 0), seq=0))
 
 
 def _pack_state(
@@ -167,8 +173,14 @@ class FakeSerial:
 def _patch_serial_modules(
     monkeypatch: pytest.MonkeyPatch,
     responses_batches: list[dict[str, Any]],
+    *,
+    prepend_handshake_pong: bool = True,
 ) -> None:
-    FakeSerial.response_batches = list(responses_batches)
+    batches = list(responses_batches)
+    if prepend_handshake_pong and batches:
+        batches[0] = dict(batches[0])
+        batches[0]["bytes"] = _HANDSHAKE_PONG + batches[0].get("bytes", b"")
+    FakeSerial.response_batches = batches
     FakeSerial.instances = []
 
     serial_module = types.ModuleType("serial")
@@ -497,7 +509,8 @@ async def test_measure_mode_sends_binary_commands_and_parses_bio(monkeypatch: py
     serial = FakeSerial.instances[0]
     sent = _decode_written_frames(serial)
     msg_types = [msg_type for _version, msg_type, _seq, _payload in sent]
-    assert msg_types[:3] == [CMD_SET_FOCUS, CMD_SET_HM, CMD_SET_BIO_MS]
+    assert msg_types[0] == CMD_PING
+    assert msg_types[1:4] == [CMD_SET_FOCUS, CMD_SET_HM, CMD_SET_BIO_MS]
 
 
 @pytest.mark.asyncio
@@ -532,7 +545,8 @@ async def test_locate_and_measure_partial_read_and_focus_lock(monkeypatch: pytes
     serial = FakeSerial.instances[0]
     sent = _decode_written_frames(serial)
     msg_types = [msg_type for _version, msg_type, _seq, _payload in sent]
-    assert msg_types[0:2] == [CMD_SET_HM, CMD_SET_TARGETS_MS]
+    assert msg_types[0] == CMD_PING
+    assert msg_types[1:3] == [CMD_SET_HM, CMD_SET_TARGETS_MS]
     assert CMD_SET_FOCUS in msg_types
 
 
@@ -1098,6 +1112,99 @@ def test_hello_without_light_sensor_feature_bit() -> None:
     event = decode_event(EVT_HELLO, payload)
     assert event["type"] == "hello"
     assert not (event["feature_bits"] & FEAT_LIGHT_SENSOR)
+
+
+# ---------------------------------------------------------------------------
+# Protocol version handshake tests
+# ---------------------------------------------------------------------------
+
+
+class TestHandshakeVersion:
+    """Verify _handshake_version() accepts correct versions and rejects mismatches."""
+
+    def test_handshake_version_succeeds_on_pong(self) -> None:
+        """Correct-version PONG frame passes handshake."""
+        tool = MmWave()
+        pong_payload = struct.pack("<I", 0)
+        pong_frame = encode_frame(EVT_PONG, pong_payload, seq=0)
+        ser = FailingSerial(pong_frame)
+        tx_state: dict[str, int] = {"seq": 0}
+        rx_buffer = bytearray()
+
+        result = tool._handshake_version(ser, tx_state, rx_buffer)
+        assert result is None
+
+    def test_handshake_version_succeeds_on_existing_telemetry(self) -> None:
+        """Correct-version EVT_STATE frame (not just PONG) passes handshake."""
+        tool = MmWave()
+        state_payload = _pack_state(
+            t_ms=100, state_enum=0, pose_enum=0, head_moving=0,
+            human=0, n_targets=0, dist_new=0, dist_mm=0xFFFF,
+        )
+        state_frame = encode_frame(EVT_STATE, state_payload, seq=5)
+        ser = FailingSerial(state_frame)
+        tx_state: dict[str, int] = {"seq": 0}
+        rx_buffer = bytearray()
+
+        result = tool._handshake_version(ser, tx_state, rx_buffer)
+        assert result is None
+
+    def test_handshake_version_fails_on_version_mismatch(self) -> None:
+        """Wrong-version frame returns error string with both versions."""
+        tool = MmWave()
+        wrong_version = 99
+        pong_payload = struct.pack("<I", 0)
+        pong_frame = encode_frame(EVT_PONG, pong_payload, seq=0, version=wrong_version)
+        ser = FailingSerial(pong_frame)
+        tx_state: dict[str, int] = {"seq": 0}
+        rx_buffer = bytearray()
+
+        result = tool._handshake_version(ser, tx_state, rx_buffer)
+        assert result is not None
+        assert "mismatch" in result
+        assert str(wrong_version) in result
+        assert str(PROTO_VERSION) in result
+
+    def test_handshake_version_timeout_on_no_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty serial within timeout returns timeout error."""
+        import healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave as mmwave_mod
+
+        monkeypatch.setattr(mmwave_mod, "HANDSHAKE_TIMEOUT_S", 0.05)
+        tool = MmWave()
+        ser = FailingSerial(b"")
+        tx_state: dict[str, int] = {"seq": 0}
+        rx_buffer = bytearray()
+
+        result = tool._handshake_version(ser, tx_state, rx_buffer)
+        assert result is not None
+        assert "timeout" in result
+
+    def test_handshake_version_write_failure(self) -> None:
+        """OSError on CMD_PING write returns error string."""
+        tool = MmWave()
+        ser = FailingSerial(fail_write=True)
+        tx_state: dict[str, int] = {"seq": 0}
+        rx_buffer = bytearray()
+
+        result = tool._handshake_version(ser, tx_state, rx_buffer)
+        assert result is not None
+        assert "write failed" in result
+
+    @pytest.mark.asyncio
+    async def test_full_call_returns_version_mismatch_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Async integration: wrong-version-only stream → status: version_mismatch."""
+        wrong_version = 99
+        pong_payload = struct.pack("<I", 0)
+        wrong_pong = encode_frame(EVT_PONG, pong_payload, seq=0, version=wrong_version)
+        # Use prepend_handshake_pong=False so the only data is the wrong-version frame
+        _patch_serial_modules(monkeypatch, [{"bytes": wrong_pong}], prepend_handshake_pong=False)
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="scan", duration_s=0.1)
+        assert response["status"] == "version_mismatch"
+        assert "error" in response
+        assert str(wrong_version) in response["error"]
+        assert str(PROTO_VERSION) in response["error"]
 
 
 # ---------------------------------------------------------------------------

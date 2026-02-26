@@ -12,6 +12,7 @@
 
 ### Done
 
+- [x] Protocol version handshake rejection — `_handshake_version()` sends CMD_PING at session start, validates first frame's version byte, returns version_mismatch error on failure; 6 new tests (2026-02-26)
 - [x] Bio rate boundary condition tests — 22 tests for decode at firmware guard rails (BR 4–30, HR 35–200), null sentinels, wire edge cases, tool acceptance gate (2026-02-26)
 - [x] LightOrchestrator file I/O error tests — 21 tests for corrupted/truncated/binary JSON, non-dict repair, permission errors on read/write/flush, analytics write failures, prune edge cases (2026-02-26)
 - [x] Add test coverage for openai_realtime.py — 71 total tests (60 new) covering all public methods: receive (mono/stereo/resample), emit (idle logic with mmWave/non-mmWave policy gating), send_idle_signal, full event loop routing, shutdown cleanup, apply_personality, restart_session, helpers, API key persistence; fixed scipy float64 resample bug in receive() (2026-02-24)

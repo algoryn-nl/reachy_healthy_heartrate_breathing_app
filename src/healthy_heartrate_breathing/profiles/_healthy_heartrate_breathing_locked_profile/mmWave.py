@@ -38,6 +38,7 @@ EXPECTED_VID = 0x303A
 EXPECTED_PID = 0x1001
 PROBE_PING_TIMEOUT_S = 0.5
 PROBE_HELLO_TIMEOUT_S = 2.0
+HANDSHAKE_TIMEOUT_S = 2.0
 
 try:
     import serial
@@ -239,6 +240,45 @@ class MmWave(Tool):
         except OSError as exc:
             logger.warning("Serial write failed (msg_type=0x%02X): %s", msg_type, exc)
             raise
+
+    def _handshake_version(self, ser: Any, tx_state: Dict[str, int], rx_buffer: bytearray) -> Optional[str]:
+        """Send CMD_PING and verify the first response frame's protocol version.
+
+        Returns None on success (version matches), or an error string on
+        mismatch, timeout, or write failure.
+        """
+        try:
+            self._send_command(ser, tx_state, CMD_PING)
+        except OSError as exc:
+            return f"handshake write failed: {exc}"
+
+        deadline = time.monotonic() + HANDSHAKE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            try:
+                # Read exactly 1 byte at a time so remaining serial data
+                # (telemetry frames) stays in the serial buffer for
+                # downstream code (_scan_sync / _measure_sync) to consume.
+                chunk = ser.read(1)
+            except OSError:
+                return "handshake read failed: serial error"
+            if not chunk:
+                continue
+
+            rx_buffer.extend(chunk)
+            for encoded_frame in extract_encoded_frames(rx_buffer):
+                try:
+                    version, _msg_type, _seq, _payload = decode_frame(encoded_frame)
+                except ProtocolError:
+                    continue
+
+                if version == PROTO_VERSION:
+                    return None  # success
+                return (
+                    f"protocol version mismatch: device sent v{version}, "
+                    f"host expects v{PROTO_VERSION}"
+                )
+
+        return "handshake timeout: no response from device"
 
     def _poll_events(self, ser: Any, rx_buffer: bytearray) -> list[Dict[str, Any]]:
         try:
@@ -629,6 +669,15 @@ class MmWave(Tool):
             tx_state = {"seq": 0}
             rx_buffer = bytearray()
             with serial.Serial(serial_port, 115200, timeout=0.2) as ser:
+                handshake_err = self._handshake_version(ser, tx_state, rx_buffer)
+                if handshake_err is not None:
+                    logger.warning("mmWave handshake failed on %s: %s", serial_port, handshake_err)
+                    return {
+                        "error": handshake_err,
+                        "serial_port": serial_port,
+                        "status": "version_mismatch",
+                    }
+
                 response: Dict[str, Any] = {
                     "serial_port": serial_port,
                     "mode": mode,

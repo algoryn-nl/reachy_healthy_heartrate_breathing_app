@@ -212,6 +212,7 @@ The project includes a custom hardware component under `hardware/`.
 - Protocol codec: `profiles/_healthy_heartrate_breathing_locked_profile/mmwave_protocol.py` — encode/decode frames, COBS, CRC
 - Tool: `profiles/_healthy_heartrate_breathing_locked_profile/mmWave.py` — modes: `scan`, `measure`, `locate_and_measure`; runs serial I/O in `asyncio.to_thread`
   - Serial port auto-detection: three-tier strategy (VID/PID `0x303A:0x1001` → glob fallback → HELLO probe with `CMD_PING`/`EVT_PONG` or DTR reset → `EVT_HELLO`)
+  - Protocol version handshake: `_handshake_version()` sends `CMD_PING` at session start and validates the first response frame's version byte; fails fast with `status: "version_mismatch"` on mismatch or timeout (defense-in-depth: `_poll_events()` still drops and warns on mismatched frames)
 - Decode utility: `hardware/tools/mmwave_decode.py` — CLI for live serial or capture file decoding (`--format pretty|json`)
 
 **Idle scanning policy** (in `ToolDispatcher` via `IdlePolicy`; state diagram in `idle_policy.py` module docstring):
@@ -439,7 +440,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (265 tests total; includes bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (271 tests total; includes protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, and full openai_realtime coverage)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 
