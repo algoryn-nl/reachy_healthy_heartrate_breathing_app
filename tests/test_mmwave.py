@@ -251,6 +251,215 @@ def test_bio_null_sentinel_decodes_to_none() -> None:
     assert event["hr"] is None
 
 
+# ---------------------------------------------------------------------------
+# Bio rate boundary condition tests (firmware guard rails: BR 4–30, HR 35–200)
+# ---------------------------------------------------------------------------
+
+
+class TestBioRateBoundaryDecode:
+    """Verify decode_event handles exact guard-rail boundary values for bio rates.
+
+    Firmware encodes rates as centi-bpm (uint16_t, ×100). Guard rails:
+      BR: 4.0–30.0 bpm  →  wire 400–3000
+      HR: 35.0–200.0 bpm →  wire 3500–20000
+    Values outside rails are sent as 0xFFFF sentinel → decoded as None.
+    """
+
+    @pytest.mark.parametrize(
+        "br_centi, hr_centi, expected_br, expected_hr",
+        [
+            # Exact lower bounds
+            (400, 3500, 4.0, 35.0),
+            # Exact upper bounds
+            (3000, 20000, 30.0, 200.0),
+            # Just inside lower bounds
+            (401, 3501, 4.01, 35.01),
+            # Just inside upper bounds
+            (2999, 19999, 29.99, 199.99),
+            # Mid-range normal values
+            (1400, 7200, 14.0, 72.0),
+            # Minimum non-null wire value (1 centi-bpm = 0.01 bpm)
+            (1, 1, 0.01, 0.01),
+            # Maximum non-null wire value (0xFFFE = 655.34 bpm)
+            (0xFFFE, 0xFFFE, 655.34, 655.34),
+            # Zero wire value (0 centi-bpm = 0.0 bpm, distinct from null)
+            (0, 0, 0.0, 0.0),
+        ],
+        ids=[
+            "exact-lower-bound",
+            "exact-upper-bound",
+            "just-inside-lower",
+            "just-inside-upper",
+            "mid-range",
+            "min-nonzero-wire",
+            "max-non-null-wire",
+            "zero-wire",
+        ],
+    )
+    def test_bio_boundary_values_decode(
+        self, br_centi: int, hr_centi: int, expected_br: float, expected_hr: float
+    ) -> None:
+        payload = _pack_bio(t_ms=100, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=br_centi, hr_centi=hr_centi)
+        event = decode_event(EVT_BIO, payload)
+        assert event["br"] == pytest.approx(expected_br, abs=1e-9)
+        assert event["hr"] == pytest.approx(expected_hr, abs=1e-9)
+
+    def test_bio_null_sentinel_both(self) -> None:
+        payload = _pack_bio(t_ms=100, allowed=0, valid=0, br_new=0, hr_new=0, br_centi=0xFFFF, hr_centi=0xFFFF)
+        event = decode_event(EVT_BIO, payload)
+        assert event["br"] is None
+        assert event["hr"] is None
+
+    def test_bio_null_sentinel_br_only(self) -> None:
+        payload = _pack_bio(t_ms=100, allowed=1, valid=0, br_new=0, hr_new=1, br_centi=0xFFFF, hr_centi=7200)
+        event = decode_event(EVT_BIO, payload)
+        assert event["br"] is None
+        assert event["hr"] == pytest.approx(72.0)
+
+    def test_bio_null_sentinel_hr_only(self) -> None:
+        payload = _pack_bio(t_ms=100, allowed=1, valid=0, br_new=1, hr_new=0, br_centi=1400, hr_centi=0xFFFF)
+        event = decode_event(EVT_BIO, payload)
+        assert event["br"] == pytest.approx(14.0)
+        assert event["hr"] is None
+
+    def test_bio_flags_passthrough(self) -> None:
+        """Verify allowed/valid/br_new/hr_new flags are decoded as integers."""
+        payload = _pack_bio(t_ms=500, allowed=1, valid=0, br_new=0, hr_new=1, br_centi=1400, hr_centi=7200)
+        event = decode_event(EVT_BIO, payload)
+        assert event["allowed"] == 1
+        assert event["valid"] == 0
+        assert event["br_new"] == 0
+        assert event["hr_new"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Bio rate acceptance gate tests (tool layer: _measure_sync valid_bio logic)
+# ---------------------------------------------------------------------------
+
+
+class TestBioAcceptanceGate:
+    """Verify _measure_sync gates valid_bio on allowed, valid, and non-None rates.
+
+    Acceptance requires ALL of: allowed=1, valid=1, br is not None, hr is not None.
+    """
+
+    @staticmethod
+    def _bio_frame(
+        *, allowed: int, valid: int, br_centi: int = 1400, hr_centi: int = 7200, seq: int = 1
+    ) -> bytes:
+        payload = _pack_bio(
+            t_ms=100, allowed=allowed, valid=valid, br_new=1, hr_new=1, br_centi=br_centi, hr_centi=hr_centi
+        )
+        return bytes(encode_frame(EVT_BIO, payload, seq=seq))
+
+    @pytest.mark.asyncio
+    async def test_accepted_when_allowed_valid_rates_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stream = self._bio_frame(allowed=1, valid=1, br_centi=1400, hr_centi=7200)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["status"] == "ok"
+        assert response["measure"]["success"] is True
+        assert response["measure"]["valid_bio"]["heart_rate_bpm"] == pytest.approx(72.0)
+        assert response["measure"]["valid_bio"]["breath_rate_bpm"] == pytest.approx(14.0)
+
+    @pytest.mark.asyncio
+    async def test_rejected_when_not_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stream = self._bio_frame(allowed=0, valid=1)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["status"] == "measure_inconclusive"
+        assert response["measure"]["success"] is False
+        assert response["measure"]["valid_bio"] is None
+
+    @pytest.mark.asyncio
+    async def test_rejected_when_not_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stream = self._bio_frame(allowed=1, valid=0)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["status"] == "measure_inconclusive"
+        assert response["measure"]["success"] is False
+        assert response["measure"]["valid_bio"] is None
+
+    @pytest.mark.asyncio
+    async def test_rejected_when_br_null(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stream = self._bio_frame(allowed=1, valid=1, br_centi=0xFFFF, hr_centi=7200)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["status"] == "measure_inconclusive"
+        assert response["measure"]["success"] is False
+        assert response["measure"]["valid_bio"] is None
+
+    @pytest.mark.asyncio
+    async def test_rejected_when_hr_null(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stream = self._bio_frame(allowed=1, valid=1, br_centi=1400, hr_centi=0xFFFF)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["status"] == "measure_inconclusive"
+        assert response["measure"]["success"] is False
+        assert response["measure"]["valid_bio"] is None
+
+    @pytest.mark.asyncio
+    async def test_rejected_when_both_null(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stream = self._bio_frame(allowed=1, valid=1, br_centi=0xFFFF, hr_centi=0xFFFF)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["status"] == "measure_inconclusive"
+        assert response["measure"]["success"] is False
+        assert response["measure"]["valid_bio"] is None
+
+    @pytest.mark.asyncio
+    async def test_accepted_at_exact_guard_rail_lower_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """BR=4.00 bpm (wire 400), HR=35.00 bpm (wire 3500) — exact lower bounds."""
+        stream = self._bio_frame(allowed=1, valid=1, br_centi=400, hr_centi=3500)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["measure"]["success"] is True
+        assert response["measure"]["valid_bio"]["breath_rate_bpm"] == pytest.approx(4.0)
+        assert response["measure"]["valid_bio"]["heart_rate_bpm"] == pytest.approx(35.0)
+
+    @pytest.mark.asyncio
+    async def test_accepted_at_exact_guard_rail_upper_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """BR=30.00 bpm (wire 3000), HR=200.00 bpm (wire 20000) — exact upper bounds."""
+        stream = self._bio_frame(allowed=1, valid=1, br_centi=3000, hr_centi=20000)
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["measure"]["success"] is True
+        assert response["measure"]["valid_bio"]["breath_rate_bpm"] == pytest.approx(30.0)
+        assert response["measure"]["valid_bio"]["heart_rate_bpm"] == pytest.approx(200.0)
+
+    @pytest.mark.asyncio
+    async def test_first_valid_bio_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """_measure_sync returns on the first valid bio, ignoring subsequent messages."""
+        first = self._bio_frame(allowed=1, valid=1, br_centi=1400, hr_centi=7200, seq=1)
+        second = self._bio_frame(allowed=1, valid=1, br_centi=1800, hr_centi=8000, seq=2)
+        _patch_serial_modules(monkeypatch, [{"bytes": first + second}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["measure"]["valid_bio"]["heart_rate_bpm"] == pytest.approx(72.0)
+        assert response["measure"]["valid_bio"]["breath_rate_bpm"] == pytest.approx(14.0)
+
+    @pytest.mark.asyncio
+    async def test_skips_invalid_then_accepts_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invalid bio messages are skipped; first valid one is accepted."""
+        invalid = self._bio_frame(allowed=0, valid=0, br_centi=0xFFFF, hr_centi=0xFFFF, seq=1)
+        valid = self._bio_frame(allowed=1, valid=1, br_centi=1600, hr_centi=6500, seq=2)
+        _patch_serial_modules(monkeypatch, [{"bytes": invalid + valid}])
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+        assert response["measure"]["success"] is True
+        assert response["measure"]["valid_bio"]["heart_rate_bpm"] == pytest.approx(65.0)
+        assert response["measure"]["valid_bio"]["breath_rate_bpm"] == pytest.approx(16.0)
+        assert response["measure"]["attempts"] == 2
+
+
 def test_light_valid_decodes_float_lux() -> None:
     payload = _pack_light(t_ms=456, valid=1, lux=123.45)
     event = decode_event(EVT_LIGHT, payload)
