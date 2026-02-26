@@ -349,3 +349,42 @@ class TestNonBlocking:
 
         assert elapsed < 0.05, f"dispatch() blocked for {elapsed:.3f}s"
         await d.cancel()
+
+
+class TestMultiTargetRouting:
+    @pytest.mark.asyncio
+    async def test_multi_target_calls_record_multi_target(self, tmp_path) -> None:
+        """When max_target_count > 1, record_multi_target is called instead of record_target_found."""
+        policy = _idle_policy()
+        result = {
+            "scan": {
+                "latest_target": {"x": 1.0, "y": 2.0, "r": 0.8},
+                "max_target_count": 3,
+                "targets_seen": 2,
+            },
+        }
+        dispatch = AsyncMock(return_value=result)
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-mt", is_idle=True)
+        assert policy.last_multi_target_time is not None
+        assert policy.last_focus_time is None  # NOT set for multi-target
+        assert policy.consecutive_misses == 0
+
+    @pytest.mark.asyncio
+    async def test_single_target_still_calls_record_target_found(self, tmp_path) -> None:
+        """When max_target_count == 1, record_target_found is still called."""
+        policy = _idle_policy()
+        result = {
+            "scan": {
+                "latest_target": {"x": 1.0, "y": 2.0, "r": 0.8},
+                "max_target_count": 1,
+                "targets_seen": 1,
+            },
+        }
+        dispatch = AsyncMock(return_value=result)
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, idle_policy=policy)
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-st", is_idle=True)
+        assert policy.last_focus_time is not None
+        assert policy.last_multi_target_time is None

@@ -132,6 +132,17 @@ def _mmwave_is_no_target(result: Any) -> bool:
     return isinstance(targets_seen, int) and targets_seen <= 0
 
 
+def _mmwave_is_multi_target(result: Any) -> bool:
+    """Return True when mmWave output indicates multiple targets."""
+    if not isinstance(result, dict):
+        return False
+    scan = result.get("scan")
+    if not isinstance(scan, dict):
+        return False
+    max_count = scan.get("max_target_count", 0)
+    return isinstance(max_count, int) and max_count > 1
+
+
 class ToolDispatcher:
     """Dispatches tool calls, integrating idle policy and light orchestration.
 
@@ -290,6 +301,8 @@ class ToolDispatcher:
             if isinstance(tool_result, dict) and tool_result.get("error"):
                 logger.warning("Idle mmWave failed: %s", _short_text(tool_result.get("error")))
                 self._idle_policy.record_error(now)
+            elif _mmwave_is_multi_target(tool_result):
+                self._idle_policy.record_multi_target(now)
             elif _mmwave_has_target(tool_result):
                 self._idle_policy.record_target_found(now)
             elif _mmwave_is_no_target(tool_result):
