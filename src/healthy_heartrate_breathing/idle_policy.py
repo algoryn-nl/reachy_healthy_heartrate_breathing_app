@@ -118,6 +118,7 @@ sweep_cooldown_s                       150.0    HEALTHY_MM_WAVE_SWEEP_COOLDOWN_S
 post_focus_quiet_s                      45.0    HEALTHY_MM_WAVE_POST_FOCUS_QUIET_S               >= 0.0
 errors_before_suppression                3      HEALTHY_MM_WAVE_ERRORS_BEFORE_SUPPRESSION        >= 1
 error_backoff_s                        120.0    HEALTHY_MM_WAVE_ERROR_BACKOFF_S                  >= 1.0
+multi_target_interval_multiplier        2.0    HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER >= 1.0
 =====================================  =======  =============================================  =========
 
 Integration
@@ -155,6 +156,7 @@ class IdlePolicy:
     # Default thresholds for error-based suppression
     DEFAULT_ERRORS_BEFORE_SUPPRESSION: int = 3
     DEFAULT_ERROR_BACKOFF_S: float = 120.0
+    DEFAULT_MULTI_TARGET_INTERVAL_MULTIPLIER: float = 2.0
 
     def __init__(  # noqa: D107
         self,
@@ -167,6 +169,7 @@ class IdlePolicy:
         post_focus_quiet_s: float = 45.0,
         errors_before_suppression: int = DEFAULT_ERRORS_BEFORE_SUPPRESSION,
         error_backoff_s: float = DEFAULT_ERROR_BACKOFF_S,
+        multi_target_interval_multiplier: float = DEFAULT_MULTI_TARGET_INTERVAL_MULTIPLIER,
     ) -> None:
         self.interval_s = interval_s
         self.probe_interval_s = probe_interval_s
@@ -176,6 +179,7 @@ class IdlePolicy:
         self.post_focus_quiet_s = post_focus_quiet_s
         self.errors_before_suppression = errors_before_suppression
         self.error_backoff_s = error_backoff_s
+        self.multi_target_interval_multiplier = multi_target_interval_multiplier
 
         # Mutable state
         self.consecutive_misses: int = 0
@@ -183,6 +187,7 @@ class IdlePolicy:
         self.last_focus_time: float | None = None
         self.consecutive_errors: int = 0
         self.last_error_time: float | None = None
+        self.last_multi_target_time: float | None = None
 
     def sweep_allowed(self, now: float) -> bool:
         """Return True if a sweep is allowed given miss count and cooldown."""
@@ -197,9 +202,17 @@ class IdlePolicy:
         """Return True when probing is suppressed due to repeated errors."""
         return self.consecutive_errors >= self.errors_before_suppression
 
+    @property
+    def suggest_scan_only(self) -> bool:
+        """Return True when the last result was multi-target (measure would fail)."""
+        return self.last_multi_target_time is not None
+
     def should_trigger(self, idle_duration: float, is_moving: bool, now: float) -> bool:
         """Return True if an idle probe should fire now."""
-        if idle_duration <= self.probe_interval_s:
+        effective_interval = self.probe_interval_s
+        if self.last_multi_target_time is not None:
+            effective_interval *= self.multi_target_interval_multiplier
+        if idle_duration <= effective_interval:
             return False
         if is_moving:
             return False
@@ -228,11 +241,26 @@ class IdlePolicy:
         """Record that mmWave detected a target."""
         self.consecutive_misses = 0
         self.last_focus_time = now
+        self.last_multi_target_time = None  # single target clears multi-target
         if self.consecutive_errors > 0:
             logger.info("Idle mmWave sensor recovered after %d consecutive errors.", self.consecutive_errors)
         self.consecutive_errors = 0
         self.last_error_time = None
         logger.info("Idle mmWave detected target; miss counter reset.")
+
+    def record_multi_target(self, now: float) -> None:
+        """Record that mmWave detected multiple targets.
+
+        Resets miss and error counters (the sensor is working), but does NOT
+        set ``last_focus_time`` — multi-target is not a usable focus event.
+        """
+        self.consecutive_misses = 0
+        self.last_multi_target_time = now
+        if self.consecutive_errors > 0:
+            logger.info("Idle mmWave sensor recovered after %d consecutive errors.", self.consecutive_errors)
+        self.consecutive_errors = 0
+        self.last_error_time = None
+        logger.info("Idle mmWave detected multiple targets; backing off probing.")
 
     def record_no_target(self, sweep_was_used: bool) -> None:
         """Record that mmWave found no target."""
@@ -240,6 +268,7 @@ class IdlePolicy:
             logger.info("Idle mmWave sensor recovered after %d consecutive errors.", self.consecutive_errors)
         self.consecutive_errors = 0
         self.last_error_time = None
+        self.last_multi_target_time = None
         if sweep_was_used:
             self.consecutive_misses = 0
             logger.info("Idle mmWave sweep found no target; miss counter reset.")

@@ -14,6 +14,7 @@ def _policy(**overrides: object) -> IdlePolicy:
         "misses_before_sweep": 3,
         "sweep_cooldown_s": 150.0,
         "post_focus_quiet_s": 45.0,
+        "multi_target_interval_multiplier": 2.0,
     }
     defaults.update(overrides)
     return IdlePolicy(**defaults)
@@ -167,3 +168,70 @@ class TestBuildStrategyMessage:
         p = _policy()
         msg = p.build_strategy_message(sweep_allowed=False)
         assert "passive" in msg.lower() or "still" in msg.lower()
+
+
+class TestMultiTarget:
+    def test_record_multi_target_resets_misses(self) -> None:
+        p = _policy()
+        p.consecutive_misses = 5
+        p.record_multi_target(now=100.0)
+        assert p.consecutive_misses == 0
+        assert p.last_focus_time is None  # multi-target does NOT set focus
+
+    def test_record_multi_target_resets_errors(self) -> None:
+        p = _policy(errors_before_suppression=2)
+        p.record_error(now=90.0)
+        p.record_error(now=95.0)
+        assert p.sensor_suppressed is True
+        p.record_multi_target(now=100.0)
+        assert p.consecutive_errors == 0
+        assert p.sensor_suppressed is False
+
+    def test_record_multi_target_sets_timestamp(self) -> None:
+        p = _policy()
+        assert p.last_multi_target_time is None
+        p.record_multi_target(now=100.0)
+        assert p.last_multi_target_time == 100.0
+
+    def test_multi_target_multiplies_probe_interval(self) -> None:
+        p = _policy(probe_interval_s=40.0, multi_target_interval_multiplier=2.0)
+        # Without multi-target: triggers at idle_duration > 40
+        assert p.should_trigger(idle_duration=50.0, is_moving=False, now=100.0) is True
+        # Record multi-target
+        p.record_multi_target(now=100.0)
+        # Now needs idle_duration > 40 * 2.0 = 80
+        assert p.should_trigger(idle_duration=50.0, is_moving=False, now=101.0) is False
+        assert p.should_trigger(idle_duration=90.0, is_moving=False, now=101.0) is True
+
+    def test_multi_target_decays_to_normal_after_single_target(self) -> None:
+        p = _policy(probe_interval_s=40.0, multi_target_interval_multiplier=2.0)
+        p.record_multi_target(now=100.0)
+        # Multiplied interval active
+        assert p.should_trigger(idle_duration=50.0, is_moving=False, now=101.0) is False
+        # Single target clears multi-target
+        p.record_target_found(now=200.0)
+        # After post-focus quiet window expires, normal interval applies
+        assert p.should_trigger(idle_duration=50.0, is_moving=False, now=300.0) is True
+
+    def test_suggest_scan_only_true_when_multi_target(self) -> None:
+        p = _policy()
+        p.record_multi_target(now=100.0)
+        assert p.suggest_scan_only is True
+
+    def test_suggest_scan_only_false_initially(self) -> None:
+        p = _policy()
+        assert p.suggest_scan_only is False
+
+    def test_suggest_scan_only_false_after_single_target(self) -> None:
+        p = _policy()
+        p.record_multi_target(now=100.0)
+        assert p.suggest_scan_only is True
+        p.record_target_found(now=200.0)
+        assert p.suggest_scan_only is False
+
+    def test_suggest_scan_only_false_after_no_target(self) -> None:
+        p = _policy()
+        p.record_multi_target(now=100.0)
+        assert p.suggest_scan_only is True
+        p.record_no_target(sweep_was_used=False)
+        assert p.suggest_scan_only is False
