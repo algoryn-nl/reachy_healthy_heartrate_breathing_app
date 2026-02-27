@@ -12,6 +12,7 @@
 
 ### Done
 
+- [x] Device state context integration — `build_device_context()` pure function injected into mmWave results via ToolDispatcher; vitals reliability mapping, state transition detection, system prompt guidance; 17 new tests (2026-02-27)
 - [x] Multi-person tracking logic — IdlePolicy multi-target awareness (record_multi_target, suggest_scan_only, configurable interval multiplier), ToolDispatcher routing, scan-only idle mode, system prompt hint; 11 new tests (2026-02-26)
 - [x] Protocol version handshake rejection — `_handshake_version()` sends CMD_PING at session start, validates first frame's version byte, returns version_mismatch error on failure; 6 new tests (2026-02-26)
 - [x] Bio rate boundary condition tests — 22 tests for decode at firmware guard rails (BR 4–30, HR 35–200), null sentinels, wire edge cases, tool acceptance gate (2026-02-26)

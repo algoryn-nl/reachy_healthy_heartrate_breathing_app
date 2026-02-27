@@ -36,6 +36,7 @@ The mmWave tool communicates with custom firmware on an Arduino-connected mmWave
 - **Bio**: Heart rate (bpm), breathing rate (bpm), validity flags
 - **Light**: Ambient lux readings collected throughout the session
 - **Device State**: Firmware person state (`NO_TARGET`, `MULTI_TARGET`, `PRESENT_FAR`, `MOVING`, `STILL_NEAR`, `RESTING_VITALS`) surfaced as `device_state` in scan/measure results
+- **Device Context**: Structured `device_context` dict injected into tool results with `vitals_reliability` (high/moderate/low/unavailable), state transition detection, and contextual notes for LLM conversation guidance
 
 The tool picks the closest valid target during scan and automatically focuses the radar on that cluster for bio measurement. An optional sweep mode rotates the robot head left-center-right to widen the scan field.
 
@@ -181,7 +182,7 @@ src/healthy_heartrate_breathing/
   openai_realtime.py        -- WebSocket lifecycle, reconnection, session orchestration
   audio_router.py           -- receive/emit: decode base64 audio deltas, feed head wobbler, enqueue output
   idle_policy.py            -- idle detection state machine, mmWave probe scheduling
-  tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, and sensor state extraction
+  tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, sensor state extraction, and device_context enrichment
   transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
   light_orchestrator.py     -- auto-invokes light context after mmWave lux data
   tools/
