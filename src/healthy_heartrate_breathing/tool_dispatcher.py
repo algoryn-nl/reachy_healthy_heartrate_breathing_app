@@ -255,6 +255,7 @@ class ToolDispatcher:
         self._on_sensor_update = on_sensor_update
         self._semaphore = asyncio.Semaphore(1)
         self._active_task: asyncio.Task[None] | None = None
+        self._last_device_state: str | None = None
 
     def dispatch(
         self,
@@ -409,11 +410,17 @@ class ToolDispatcher:
             except Exception as e:
                 logger.warning("Auto light_context failed after mmWave: %s", e)
 
-        # Update sensor state for dashboard polling
+        # Update sensor state for dashboard + device context enrichment
         if tool_name == "mmWave" and isinstance(tool_result, dict):
             try:
+                new_sensor = extract_sensor_state(tool_result)
+                new_sensor["previous_device_state"] = self._last_device_state
+                self._last_device_state = new_sensor.get("device_state")
                 if self._on_sensor_update is not None:
-                    self._on_sensor_update(extract_sensor_state(tool_result))
+                    self._on_sensor_update(new_sensor)
+                device_ctx = build_device_context(new_sensor)
+                if device_ctx is not None:
+                    tool_result["device_context"] = device_ctx
             except Exception:
                 logger.debug("Sensor state update failed", exc_info=True)
 

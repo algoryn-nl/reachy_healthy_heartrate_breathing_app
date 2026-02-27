@@ -476,3 +476,83 @@ class TestBuildDeviceContext:
         assert ctx is not None
         assert ctx["changed"] is True
         assert "left" in ctx["transition"].lower()
+
+
+class TestDeviceContextInjection:
+    @pytest.mark.asyncio
+    async def test_device_context_injected_into_mmwave_result(self, tmp_path) -> None:
+        """MmWave result should have device_context at top level after dispatch."""
+        result = {
+            "scan": {"device_state": "RESTING_VITALS", "latest_target": {"x": 1.0}},
+            "status": "scan_done",
+        }
+        dispatch = AsyncMock(return_value=result)
+        send_result = AsyncMock()
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, send_tool_result=send_result)
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="call-dc", is_idle=False)
+        sent_json = json.loads(send_result.call_args[0][1])
+        assert "device_context" in sent_json
+        assert sent_json["device_context"]["state"] == "RESTING_VITALS"
+        assert sent_json["device_context"]["vitals_reliability"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_previous_state_tracked_across_calls(self, tmp_path) -> None:
+        """Second mmWave call should see previous_device_state from first call."""
+        sensor_state: dict = {}
+        dispatch = AsyncMock()
+        send_result = AsyncMock()
+        d = _dispatcher(
+            tmp_path,
+            dispatch_tool=dispatch,
+            send_tool_result=send_result,
+            on_sensor_update=_replace_sensor_state(sensor_state),
+        )
+
+        # First call: MOVING
+        dispatch.return_value = {
+            "scan": {"device_state": "MOVING", "latest_target": {"x": 1.0}},
+            "status": "scan_done",
+        }
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=False)
+
+        # Second call: STILL_NEAR
+        dispatch.return_value = {
+            "scan": {"device_state": "STILL_NEAR", "latest_target": {"x": 1.0}},
+            "status": "scan_done",
+        }
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c2", is_idle=False)
+
+        sent_json = json.loads(send_result.call_args[0][1])
+        ctx = sent_json["device_context"]
+        assert ctx["state"] == "STILL_NEAR"
+        assert ctx["previous_state"] == "MOVING"
+        assert ctx["changed"] is True
+
+    @pytest.mark.asyncio
+    async def test_device_context_not_injected_for_non_mmwave(self, tmp_path) -> None:
+        """Non-mmWave tools should not get device_context."""
+        dispatch = AsyncMock(return_value={"status": "ok"})
+        send_result = AsyncMock()
+        d = _dispatcher(
+            tmp_path,
+            dispatch_tool=dispatch,
+            send_tool_result=send_result,
+            has_tool=lambda name: True,
+        )
+
+        await _dispatch_and_wait(d, tool_name="dance", args_json="{}", call_id="call-d", is_idle=False)
+        sent_json = json.loads(send_result.call_args[0][1])
+        assert "device_context" not in sent_json
+
+    @pytest.mark.asyncio
+    async def test_device_context_not_injected_on_error(self, tmp_path) -> None:
+        """When mmWave returns an error, device_context should not be injected."""
+        result = {"error": "serial error", "status": "disconnected"}
+        dispatch = AsyncMock(return_value=result)
+        send_result = AsyncMock()
+        d = _dispatcher(tmp_path, dispatch_tool=dispatch, send_tool_result=send_result)
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-e", is_idle=False)
+        sent_json = json.loads(send_result.call_args[0][1])
+        assert "device_context" not in sent_json
