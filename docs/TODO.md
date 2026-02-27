@@ -6,12 +6,71 @@
 
 (nothing actively in-progress)
 
-### Upcoming
+### Upcoming — Critical (before next release)
 
-(all planned items complete — see roadmap for future vision)
+- [ ] **FW-CRIT-1**: Fix vitals hysteresis bypass in `emitBio()` — require `vitalsStreak >= VITALS_CONFIRM` in `br_emit_ok`/`hr_emit_ok` (`reachy-sensor.ino`)
+- [ ] **FW-CRIT-2**: Add expiry to cached vitals (`lastBR`/`lastHR`) — invalidate after 2 s to prevent stale reporting under fallback lock (`reachy-sensor.ino`)
+- [ ] **FW-CRIT-3**: Fix race condition in presence detection — restructure `dist_ok` check to use actual (possibly fallback) distance value (`reachy-sensor.ino`)
+- [ ] **PY-CRIT-1**: Replace `sys.exit()` with exceptions in `config.py:60-64` and `prompts.py:86,88,91` — let `main.py` handle shutdown
+- [ ] **PY-CRIT-2**: Add path traversal validation in `headless_personality.py:66` and `gradio_personality.py:64,188` — check `resolve().is_relative_to()`
+- [ ] **PY-CRIT-3**: Fix falsy-zero threshold bug in `light_context.py` — replace `value or DEFAULT` with `value if value is not None else DEFAULT`
+
+### Upcoming — High Priority
+
+- [ ] **PY-HIGH-1**: Wrap `base64.b64decode()` in try/except in `audio_router.py:41`
+- [ ] **PY-HIGH-2**: Add locking to tool registry globals in `tools/core_tools.py:38-40`
+- [ ] **PY-HIGH-3**: Add independent `asyncio.wait_for()` timeout to auto light_context dispatch in `tool_dispatcher.py:397-411`
+- [ ] **PY-HIGH-4**: Fix HeadWobbler TOCTOU race — lock before generation check; fix queue drain in `reset()` (`audio/head_wobbler.py:78-81,156-165`)
+- [ ] **PY-HIGH-5**: Guard `MovementManager.start()` against thread leak — check `_thread.is_alive()` before creating new thread (`moves.py:766-771`)
+- [ ] **PY-HIGH-6**: Fix type annotation `robot: ReachyMini = None` → `robot: ReachyMini | None = None` (`main.py:39`)
+- [ ] **FW-HIGH-1**: Handle COBS encode overflow — send `EVT_ERR` or increment diagnostic counter instead of silent drop (`reachy-sensor.ino`)
+- [ ] **FW-HIGH-2**: Add sensor error telemetry — expose mmWave `update()` failure count to host (`reachy-sensor.ino`)
+- [ ] **FW-HIGH-3**: Rate-limit state telemetry — cap `EVT_STATE` emission frequency to prevent flood on oscillation (`reachy-sensor.ino`)
+
+### Upcoming — Medium Priority
+
+- [ ] **PY-MED-1**: Change `GET /personalities/save_raw` to POST in `headless_personality_ui.py:191-209`
+- [ ] **PY-MED-2**: Remove duplicate sample rate assignments in `openai_realtime.py:73-80`
+- [ ] **PY-MED-3**: Defer `last_activity_time` init to `start_up()` in `openai_realtime.py:85`; add lock for concurrent access
+- [ ] **PY-MED-4**: Fix float equality comparison for timestamps in `camera_worker.py:175`
+- [ ] **PY-MED-5**: Make `move_queue` private (prefix `_`) in `moves.py:307`
+- [ ] **PY-MED-6**: Replace API key polling loop with event-based signaling in `console.py:376-385`
+- [ ] **PY-MED-7**: Decompose `launch()` into smaller methods in `console.py:322-385`
+- [ ] **PY-MED-8**: Add analytics JSONL file rotation or size cap in `light_orchestrator.py`
+- [ ] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()`
+- [ ] **PY-MED-10**: Standardize tool error handling — error dicts for tools, exceptions for libraries, no `sys.exit()` outside `main()`
+- [ ] **FW-MED-1**: Add BH1750 periodic re-init on failure in `setup()`/`loop()`
+- [ ] **FW-MED-2**: Encapsulate firmware globals into structs (presence, vitals, timing groups)
+- [ ] **FW-MED-3**: Document buffer sizing rationale; add overflow assertions for `emitTargets()`
+- [ ] **FW-MED-4**: Add `CMD_SET_GUARD_RAILS` for runtime-configurable BR/HR/distance thresholds
+- [ ] **FW-MED-5**: Add hysteresis to `guessPose()` distance threshold (55 cm)
+
+### Upcoming — Low Priority
+
+- [ ] **PY-LOW-1**: Validate IdlePolicy constructor parameters (reject negative/zero timings)
+- [ ] **PY-LOW-2**: Log warning in `_safe_load_obj()` instead of silent `{}` return
+- [ ] **PY-LOW-3**: Defer `sys.modules` insertion in `_load_module_from_file()` until after `exec_module()` succeeds
+- [ ] **PY-LOW-4**: Add error handling to `sweep_look.py`; synchronize `max_angle` with mmWave sweep values
+- [ ] **PY-LOW-5**: Consolidate personality REST save endpoints (remove redundant GET variant)
+- [ ] **FW-LOW-1**: Replace `0x00` magic literal with `FRAME_DELIMITER` named constant
+- [ ] **FW-LOW-2**: Add firmware unit test harness for state machine, COBS codec, and CRC
+
+### Upcoming — Test Coverage Gaps
+
+- [ ] Add AudioRouter tests for malformed base64, empty audio, oversized chunks
+- [ ] Add TranscriptHandler tests for rapid concurrent `on_partial()` calls
+- [ ] Add ToolDispatcher tests for light_context timeout and malformed sensor state JSON
+- [ ] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()`
+- [ ] Add sweep_look failure-path tests (robot operation errors)
+- [ ] Add multi-threaded tests for `moves.py` and `head_wobbler.py`
+- [ ] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression)
+- [ ] Add personality management path traversal security tests
+- [ ] Replace `asyncio.sleep(0.05)` timing in tests with deterministic mechanisms
+- [ ] Convert test factory functions (`_policy()`, `_orchestrator()`) to proper pytest fixtures
 
 ### Done
 
+- [x] Full-stack code review (firmware + Python) — 44 issues identified across 5 severity levels; documented in `docs/plans/2026-02-27-code-review.md` (2026-02-27)
 - [x] Device state context integration — `build_device_context()` pure function injected into mmWave results via ToolDispatcher; vitals reliability mapping, state transition detection, system prompt guidance; 17 new tests (2026-02-27)
 - [x] Multi-person tracking logic — IdlePolicy multi-target awareness (record_multi_target, suggest_scan_only, configurable interval multiplier), ToolDispatcher routing, scan-only idle mode, system prompt hint; 11 new tests (2026-02-26)
 - [x] Protocol version handshake rejection — `_handshake_version()` sends CMD_PING at session start, validates first frame's version byte, returns version_mismatch error on failure; 6 new tests (2026-02-26)
@@ -61,11 +120,24 @@
 
 ### Technical Debt
 
-- `_run_realtime_session()` decomposition complete — 5 handler classes extracted (IdlePolicy, LightOrchestrator, TranscriptHandler, ToolDispatcher, AudioRouter)
+#### Active (from 2026-02-27 code review)
+
+- **`sys.exit()` in library code** (`config.py`, `prompts.py`): Blocks testability, prevents graceful error recovery. Priority: critical.
+- **Path traversal in personality management**: User-supplied profile names not validated against directory escape. Priority: critical (security).
+- **Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere. Priority: critical.
+- **Thread safety gaps**: Tool registry globals unprotected; HeadWobbler generation TOCTOU; camera_worker state transitions unsynchronized. Priority: high.
+- **Firmware vitals logic bugs**: Hysteresis bypass in emitBio, stale vitals in fallback lock, dist_ok race condition. Priority: critical.
+- **Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase. Priority: medium.
+- **Config singleton at import time**: `config = Config()` in `config.py` module body. Import-time failure cascades to all dependents. Priority: medium.
+
+#### Resolved
+
+- ~~`_run_realtime_session()` decomposition complete — 5 handler classes extracted~~ (2026-02-23)
 - ~~Tool registry initializes at import time with disk I/O and potential `sys.exit(1)`~~ (fixed: lazy init + ToolRegistryError, 2026-02-24)
 - ~~Test coverage inversely correlates with module size (`openai_realtime.py` worst)~~ (fixed: comprehensive test coverage added, 2026-02-24)
-- All planned testing gaps closed: bio rate boundaries, LightOrchestrator file I/O errors, openai_realtime.py coverage (2026-02-26)
+- ~~All planned testing gaps closed: bio rate boundaries, LightOrchestrator file I/O errors, openai_realtime.py coverage~~ (2026-02-26)
 
 ### Recurring Issues & Solutions
 
-(to be populated as issues arise)
+- **`or` vs `is not None`**: When accepting optional numeric parameters, always use `x if x is not None else default`. The `x or default` pattern silently replaces 0/0.0/False/"" with defaults.
+- **Thread safety contracts**: Every module with multi-threaded access should document expected callers and synchronization requirements in its module docstring (see `moves.py` as the gold standard).
