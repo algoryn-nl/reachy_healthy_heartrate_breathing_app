@@ -13,7 +13,7 @@
 - [x] **FW-CRIT-3**: Fix race condition in presence detection — restructure `dist_ok` check to use actual (possibly fallback) distance value (`reachy-sensor.ino`) (2026-02-28)
 - [x] **PY-CRIT-1**: Replace `sys.exit()` with exceptions in `config.py:60-64` and `prompts.py:86,88,91` — let `main.py` handle shutdown (2026-02-28)
 - [x] **PY-CRIT-2**: Add path traversal validation in `headless_personality.py:66` and `gradio_personality.py:64,188` — check `resolve().is_relative_to()` (2026-02-28)
-- [ ] **PY-CRIT-3**: Fix falsy-zero threshold bug in `light_context.py` — replace `value or DEFAULT` with `value if value is not None else DEFAULT`
+- [x] **PY-CRIT-3**: Fix falsy-zero threshold bug in `light_context.py` — replace `value or DEFAULT` with direct use of already-resolved variables (2026-02-28)
 
 ### Upcoming — High Priority
 
@@ -63,7 +63,7 @@
 - [ ] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()`
 - [ ] Add sweep_look failure-path tests (robot operation errors)
 - [ ] Add multi-threaded tests for `moves.py` and `head_wobbler.py`
-- [ ] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression)
+- [x] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression; 4 tests; 2026-02-28)
 - [x] Add personality management path traversal security tests (33 tests; 2026-02-28)
 - [ ] Replace `asyncio.sleep(0.05)` timing in tests with deterministic mechanisms
 - [ ] Convert test factory functions (`_policy()`, `_orchestrator()`) to proper pytest fixtures
@@ -124,7 +124,7 @@
 
 - ~~**`sys.exit()` in library code** (`config.py`, `prompts.py`): Blocks testability, prevents graceful error recovery.~~ (fixed: `ConfigError` exception + `main.py` catch; 2026-02-28)
 - ~~**Path traversal in personality management**: User-supplied profile names not validated against directory escape.~~ (fixed: `resolve().is_relative_to()` containment checks in both headless and Gradio paths + `_write_profile` defense-in-depth; 33 security tests; 2026-02-28)
-- **Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere. Priority: critical.
+- ~~**Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere.~~ (fixed: removed redundant `or DEFAULT` fallbacks — thresholds already resolved via `coerce_float()` with defaults; audited codebase, no other instances; 4 regression tests; 2026-02-28)
 - **Thread safety gaps**: Tool registry globals unprotected; HeadWobbler generation TOCTOU; camera_worker state transitions unsynchronized. Priority: high.
 - ~~**Firmware vitals logic bugs**: Hysteresis bypass in emitBio, stale vitals in fallback lock, dist_ok race condition.~~ (fixed: 2026-02-28)
 - **Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase. Priority: medium.

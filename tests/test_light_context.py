@@ -218,3 +218,75 @@ async def test_lux_extracted_from_mmwave_result(monkeypatch: pytest.MonkeyPatch)
     # Should have extracted lux=300 and classified as bright_active
     assert result["context_state"] == "bright_active"
     assert result["observations"]["lux"] == 300.0
+
+
+# ---------------------------------------------------------------------------
+# Falsy-zero regression (PY-CRIT-3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_zero_low_lux_threshold_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Threshold of 0.0 must not silently become the default (40.0)."""
+    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
+    tool = LightContext()
+    result = await tool(
+        _deps(),
+        lux=10.0,
+        low_lux_threshold=0.0,
+        local_hour=12,
+    )
+    # With threshold=0.0, lux=10 is NOT low (10 > 0), so neutral
+    assert result["context_state"] == "neutral"
+    assert "neutral_conditions" in result["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_zero_bright_lux_threshold_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Threshold of 0.0 must not silently become the default (250.0)."""
+    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
+    tool = LightContext()
+    result = await tool(
+        _deps(),
+        lux=10.0,
+        bright_lux_threshold=0.0,
+        local_hour=10,
+        presence_detected=True,
+    )
+    # With threshold=0.0, lux=10 IS bright (10 >= 0), so bright_active
+    assert result["context_state"] == "bright_active"
+
+
+@pytest.mark.asyncio
+async def test_zero_sharp_drop_threshold_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Threshold of 0.0 means any negative delta triggers sharp drop."""
+    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
+    tool = LightContext()
+    result = await tool(
+        _deps(),
+        lux=100.0,
+        lux_delta_60s=-1.0,
+        sharp_drop_lux=0.0,
+        local_hour=12,
+        presence_detected=True,
+        active_interaction=True,
+    )
+    # With threshold=0.0, any negative delta triggers unexpected_darkening
+    assert result["context_state"] == "unexpected_darkening"
+
+
+@pytest.mark.asyncio
+async def test_zero_prolonged_min_threshold_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Threshold of 0.0 means immediate strain risk with any low-light duration."""
+    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
+    tool = LightContext()
+    result = await tool(
+        _deps(),
+        lux=20.0,
+        local_hour=12,
+        allow_wellness_nudges=True,
+        low_light_duration_min=0.0,
+        prolonged_low_light_min=0.0,
+    )
+    # With threshold=0.0, duration=0 meets threshold, so strain_risk
+    assert result["context_state"] == "prolonged_low_light_strain_risk"

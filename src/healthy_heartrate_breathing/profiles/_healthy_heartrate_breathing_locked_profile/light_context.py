@@ -140,7 +140,7 @@ class LightContext(Tool):
         active_interaction = coerce_bool(kwargs.get("active_interaction"), True)
         presence_detected_raw = kwargs.get("presence_detected")
         presence_detected = bool(presence_detected_raw) if isinstance(presence_detected_raw, bool) else None
-        low_light_duration_min = coerce_float(kwargs.get("low_light_duration_min"), 0.0) or 0.0
+        low_light_duration_min = coerce_float(kwargs.get("low_light_duration_min"), 0.0)
         user_typical_day_low_lux = coerce_float(kwargs.get("user_typical_day_low_lux"))
 
         reason_codes: list[str] = []
@@ -155,11 +155,9 @@ class LightContext(Tool):
             recommended_actions = ["use_standard_policy_without_light_nudges"]
             confidence = 0.35
         else:
-            is_low_lux = lux <= (low_lux_threshold or self.DEFAULT_LOW_LUX_THRESHOLD)
-            is_bright_lux = lux >= (bright_lux_threshold or self.DEFAULT_BRIGHT_LUX_THRESHOLD)
-            sharp_drop = lux_delta_60s is not None and lux_delta_60s <= -(
-                sharp_drop_lux or self.DEFAULT_SHARP_DROP_LUX
-            )
+            is_low_lux = lux <= low_lux_threshold
+            is_bright_lux = lux >= bright_lux_threshold
+            sharp_drop = lux_delta_60s is not None and lux_delta_60s <= -sharp_drop_lux
             presence_ok = presence_detected is not False
 
             intentional_dim = False
@@ -246,7 +244,7 @@ class LightContext(Tool):
                 not is_night
                 and is_low_lux
                 and allow_wellness_nudges
-                and low_light_duration_min >= (prolonged_low_light_min or self.DEFAULT_PROLONGED_LOW_LIGHT_MIN)
+                and low_light_duration_min >= prolonged_low_light_min
             ):
                 context_state = "prolonged_low_light_strain_risk"
                 recommended_mode = "quiet"
