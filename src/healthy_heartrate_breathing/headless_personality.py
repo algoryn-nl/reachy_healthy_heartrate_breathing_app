@@ -62,8 +62,15 @@ def list_personalities() -> List[str]:
 
 
 def resolve_profile_dir(selection: str) -> Path:
-    """Resolve the directory path for the given profile selection."""
-    return _profiles_root() / selection
+    """Resolve the directory path for the given profile selection.
+
+    Raises ValueError if the resolved path escapes the profiles root.
+    """
+    root = _profiles_root()
+    resolved = (root / selection).resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise ValueError(f"Invalid profile path: {selection!r}")
+    return resolved
 
 
 def read_instructions_for(name: str) -> str:
@@ -99,7 +106,10 @@ def available_tools_for(selected: str) -> List[str]:
 
 
 def _write_profile(name_s: str, instructions: str, tools_text: str, voice: str = "cedar") -> None:
-    target_dir = _profiles_root() / "user_personalities" / name_s
+    user_root = (_profiles_root() / "user_personalities").resolve()
+    target_dir = (user_root / name_s).resolve()
+    if not target_dir.is_relative_to(user_root):
+        raise ValueError(f"Invalid profile name: {name_s!r}")
     target_dir.mkdir(parents=True, exist_ok=True)
     (target_dir / "instructions.txt").write_text(instructions.strip() + "\n", encoding="utf-8")
     (target_dir / "tools.txt").write_text((tools_text or "").strip() + "\n", encoding="utf-8")

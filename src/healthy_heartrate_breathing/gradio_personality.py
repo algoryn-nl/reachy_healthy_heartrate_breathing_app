@@ -61,7 +61,10 @@ class PersonalityUI:
         return names
 
     def _resolve_profile_dir(self, selection: str) -> Path:
-        return self._profiles_root / selection
+        resolved = (self._profiles_root / selection).resolve()
+        if not resolved.is_relative_to(self._profiles_root.resolve()):
+            raise ValueError(f"Invalid profile path: {selection!r}")
+        return resolved
 
     def _read_instructions_for(self, name: str) -> str:
         try:
@@ -185,7 +188,7 @@ class PersonalityUI:
             local: list[str] = []
             try:
                 if selected != self.DEFAULT_OPTION:
-                    for py in (self._profiles_root / selected).glob("*.py"):
+                    for py in self._resolve_profile_dir(selected).glob("*.py"):
                         local.append(py.stem)
             except Exception:
                 logger.warning("Failed to list local tools for %r", selected, exc_info=True)
@@ -251,7 +254,10 @@ class PersonalityUI:
             if not name_s:
                 return gr.update(), gr.update(), "Please enter a valid name."
             try:
-                target_dir = self._profiles_root / "user_personalities" / name_s
+                user_root = (self._profiles_root / "user_personalities").resolve()
+                target_dir = (user_root / name_s).resolve()
+                if not target_dir.is_relative_to(user_root):
+                    return gr.update(), gr.update(), "Invalid personality name."
                 target_dir.mkdir(parents=True, exist_ok=True)
                 (target_dir / "instructions.txt").write_text(instructions.strip() + "\n", encoding="utf-8")
                 (target_dir / "tools.txt").write_text(tools_text.strip() + "\n", encoding="utf-8")
