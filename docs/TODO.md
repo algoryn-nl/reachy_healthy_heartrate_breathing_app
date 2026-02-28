@@ -17,7 +17,7 @@
 
 ### Upcoming — High Priority
 
-- [ ] **PY-HIGH-1**: Wrap `base64.b64decode()` in try/except in `audio_router.py:41`
+- [x] **PY-HIGH-1**: Wrap `base64.b64decode()` in try/except in `audio_router.py:41` (2026-02-28)
 - [ ] **PY-HIGH-2**: Add locking to tool registry globals in `tools/core_tools.py:38-40`
 - [ ] **PY-HIGH-3**: Add independent `asyncio.wait_for()` timeout to auto light_context dispatch in `tool_dispatcher.py:397-411`
 - [ ] **PY-HIGH-4**: Fix HeadWobbler TOCTOU race — lock before generation check; fix queue drain in `reset()` (`audio/head_wobbler.py:78-81,156-165`)
@@ -57,7 +57,7 @@
 
 ### Upcoming — Test Coverage Gaps
 
-- [ ] Add AudioRouter tests for malformed base64, empty audio, oversized chunks
+- [x] Add AudioRouter tests for malformed base64, empty audio, odd-byte-length (5 tests; 2026-02-28)
 - [ ] Add TranscriptHandler tests for rapid concurrent `on_partial()` calls
 - [ ] Add ToolDispatcher tests for light_context timeout and malformed sensor state JSON
 - [ ] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()`

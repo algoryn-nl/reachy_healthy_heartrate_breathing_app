@@ -69,3 +69,48 @@ class TestOnAudioDelta:
         await r.on_audio_delta(delta_b64)
 
         enqueue.assert_called_once()
+
+
+class TestMalformedInput:
+    @pytest.mark.asyncio
+    async def test_malformed_base64_skipped(self) -> None:
+        enqueue = AsyncMock()
+        r = _router(enqueue_audio=enqueue)
+        await r.on_audio_delta("!!!not-valid-base64!!!")
+
+        enqueue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_base64_skipped(self) -> None:
+        enqueue = AsyncMock()
+        r = _router(enqueue_audio=enqueue)
+        # Empty string decodes to b"" (0 bytes)
+        await r.on_audio_delta("")
+
+        enqueue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_odd_byte_length_skipped(self) -> None:
+        enqueue = AsyncMock()
+        r = _router(enqueue_audio=enqueue)
+        # 3 bytes — not a valid int16 array
+        delta_b64 = base64.b64encode(b"\x01\x02\x03").decode("utf-8")
+        await r.on_audio_delta(delta_b64)
+
+        enqueue.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_malformed_base64_still_calls_activity(self) -> None:
+        activity_cb = MagicMock()
+        r = _router(on_activity=activity_cb)
+        await r.on_audio_delta("!!!bad!!!")
+
+        activity_cb.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_malformed_base64_still_feeds_wobbler(self) -> None:
+        wobbler_feed = MagicMock()
+        r = _router(feed_head_wobbler=wobbler_feed)
+        await r.on_audio_delta("!!!bad!!!")
+
+        wobbler_feed.assert_called_once_with("!!!bad!!!")

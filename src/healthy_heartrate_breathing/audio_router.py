@@ -38,6 +38,16 @@ class AudioRouter:
 
         self._on_activity()
 
-        audio_array = np.frombuffer(base64.b64decode(delta), dtype=np.int16).reshape(1, -1)
+        try:
+            raw = base64.b64decode(delta)
+        except Exception:
+            logger.warning("Skipping malformed base64 audio delta (%d chars)", len(delta))
+            return
+
+        if len(raw) == 0 or len(raw) % 2 != 0:
+            logger.warning("Skipping audio delta with invalid byte length (%d bytes)", len(raw))
+            return
+
+        audio_array = np.frombuffer(raw, dtype=np.int16).reshape(1, -1)
 
         await self._enqueue_audio(self.output_sample_rate, audio_array)
