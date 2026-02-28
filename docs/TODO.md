@@ -60,7 +60,7 @@
 - [x] Add AudioRouter tests for malformed base64, empty audio, odd-byte-length (5 tests; 2026-02-28)
 - [ ] Add TranscriptHandler tests for rapid concurrent `on_partial()` calls
 - [ ] Add ToolDispatcher tests for light_context timeout and malformed sensor state JSON
-- [ ] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()`
+- [x] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()` (17 tests; 2026-02-28)
 - [ ] Add sweep_look failure-path tests (robot operation errors)
 - [ ] Add multi-threaded tests for `moves.py` and `head_wobbler.py`
 - [x] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression; 4 tests; 2026-02-28)

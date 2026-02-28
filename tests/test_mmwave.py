@@ -1,5 +1,5 @@
 """Tests for the binary mmWave protocol and tool integration."""
-# ruff: noqa: D102,D103,D105,D107
+# ruff: noqa: D101,D102,D103,D105,D107
 
 from __future__ import annotations
 import sys
@@ -356,9 +356,7 @@ class TestBioAcceptanceGate:
     """
 
     @staticmethod
-    def _bio_frame(
-        *, allowed: int, valid: int, br_centi: int = 1400, hr_centi: int = 7200, seq: int = 1
-    ) -> bytes:
+    def _bio_frame(*, allowed: int, valid: int, br_centi: int = 1400, hr_centi: int = 7200, seq: int = 1) -> bytes:
         payload = _pack_bio(
             t_ms=100, allowed=allowed, valid=valid, br_new=1, hr_new=1, br_centi=br_centi, hr_centi=hr_centi
         )
@@ -1138,8 +1136,14 @@ class TestHandshakeVersion:
         """Correct-version EVT_STATE frame (not just PONG) passes handshake."""
         tool = MmWave()
         state_payload = _pack_state(
-            t_ms=100, state_enum=0, pose_enum=0, head_moving=0,
-            human=0, n_targets=0, dist_new=0, dist_mm=0xFFFF,
+            t_ms=100,
+            state_enum=0,
+            pose_enum=0,
+            head_moving=0,
+            human=0,
+            n_targets=0,
+            dist_new=0,
+            dist_mm=0xFFFF,
         )
         state_frame = encode_frame(EVT_STATE, state_payload, seq=5)
         ser = FailingSerial(state_frame)
@@ -1641,3 +1645,645 @@ def test_extract_sensor_state_error_without_status() -> None:
     assert state["error"] == "something went wrong"
     assert state["status"] == "error"
     assert "updated_at" in state
+
+
+# ---------------------------------------------------------------------------
+# _poll_events unit tests: timeout, partial frames, dropped frames
+# ---------------------------------------------------------------------------
+
+
+class IntermittentSerial:
+    """Fake serial that delivers data in configurable stages with empty-read gaps.
+
+    Each stage is a ``(data, empty_reads_after)`` tuple.  The serial delivers
+    ``data`` bytes first (via ``read``), then returns ``b""`` for
+    ``empty_reads_after`` subsequent reads before advancing to the next stage.
+    After all stages are exhausted, reads return ``b""`` forever.
+    """
+
+    def __init__(self, stages: list[tuple[bytes, int]]) -> None:
+        self._stages = list(stages)
+        self._buffer = bytearray()
+        self._empty_left = 0
+        self._advance()
+        self.writes: list[bytes] = []
+
+    def _advance(self) -> None:
+        if self._stages:
+            data, empties = self._stages.pop(0)
+            self._buffer.extend(data)
+            self._empty_left = empties
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buffer)
+
+    def read(self, size: int = 1) -> bytes:
+        if self._buffer:
+            n = min(size, len(self._buffer))
+            out = bytes(self._buffer[:n])
+            del self._buffer[:n]
+            if not self._buffer and self._empty_left <= 0:
+                self._advance()
+            return out
+        if self._empty_left > 0:
+            self._empty_left -= 1
+            if self._empty_left <= 0:
+                self._advance()
+            return b""
+        return b""
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(bytes(data))
+
+    def flush(self) -> None:
+        pass
+
+
+class TestPollEventsTimeout:
+    def test_empty_read_returns_empty_list(self) -> None:
+        """Serial timeout (empty read) returns no events."""
+        tool = MmWave()
+        ser = FailingSerial(b"")
+        events = tool._poll_events(ser, bytearray())
+        assert events == []
+
+    def test_partial_frame_stays_in_buffer(self) -> None:
+        """Data without a 0x00 delimiter stays buffered, no events returned."""
+        tool = MmWave()
+        # A fragment of a frame — no trailing 0x00 delimiter
+        fragment = b"\x03\x01\x02"
+        ser = FailingSerial(fragment)
+        rx_buffer = bytearray()
+
+        events = tool._poll_events(ser, rx_buffer)
+        assert events == []
+        # Fragment should remain in the rx_buffer for the next call
+        assert len(rx_buffer) == len(fragment)
+
+    def test_buffered_partial_completes_on_next_call(self) -> None:
+        """A frame split across two _poll_events calls is decoded correctly."""
+        tool = MmWave()
+        bio_payload = _pack_bio(
+            t_ms=100,
+            allowed=1,
+            valid=1,
+            br_new=1,
+            hr_new=1,
+            br_centi=1400,
+            hr_centi=7200,
+        )
+        full_frame = bytes(encode_frame(EVT_BIO, bio_payload, seq=1))
+
+        # Split the frame in half
+        mid = len(full_frame) // 2
+        first_half = full_frame[:mid]
+        second_half = full_frame[mid:]
+
+        rx_buffer = bytearray()
+
+        # First call: deliver first half only — no delimiter yet
+        ser1 = FailingSerial(first_half)
+        events1 = tool._poll_events(ser1, rx_buffer)
+        assert events1 == []
+        assert len(rx_buffer) > 0
+
+        # Second call: deliver second half (includes 0x00 delimiter)
+        ser2 = FailingSerial(second_half)
+        events2 = tool._poll_events(ser2, rx_buffer)
+        assert len(events2) == 1
+        assert events2[0]["type"] == "bio"
+        assert events2[0]["hr"] == pytest.approx(72.0)
+
+
+class TestPollEventsBatchAndDropped:
+    def test_multiple_events_in_single_read(self) -> None:
+        """Multiple complete frames in one read are all decoded."""
+        tool = MmWave()
+        state_payload = _pack_state(
+            t_ms=100,
+            state_enum=4,
+            pose_enum=1,
+            head_moving=0,
+            human=1,
+            n_targets=1,
+            dist_new=1,
+            dist_mm=400,
+        )
+        light_payload = _pack_light(t_ms=200, valid=1, lux=55.0)
+        bio_payload = _pack_bio(
+            t_ms=300,
+            allowed=1,
+            valid=1,
+            br_new=1,
+            hr_new=1,
+            br_centi=1400,
+            hr_centi=7200,
+        )
+        stream = (
+            encode_frame(EVT_STATE, state_payload, seq=1)
+            + encode_frame(EVT_LIGHT, light_payload, seq=2)
+            + encode_frame(EVT_BIO, bio_payload, seq=3)
+        )
+        ser = FailingSerial(stream)
+        events = tool._poll_events(ser, bytearray())
+
+        types = [e["type"] for e in events]
+        assert types == ["state", "light", "bio"]
+
+    def test_corrupt_frame_skipped_good_frame_returned(self) -> None:
+        """A CRC-corrupted frame is silently dropped; the next good frame is returned."""
+        tool = MmWave()
+
+        # Build a corrupt frame (break CRC)
+        state_payload = _pack_state(
+            t_ms=100,
+            state_enum=2,
+            pose_enum=1,
+            head_moving=0,
+            human=1,
+            n_targets=1,
+            dist_new=1,
+            dist_mm=350,
+        )
+        bad_frame = bytearray(encode_frame(EVT_STATE, state_payload, seq=1))
+        bad_frame[-3] ^= 0x11  # corrupt a byte before the delimiter
+
+        # Build a good frame
+        bio_payload = _pack_bio(
+            t_ms=200,
+            allowed=1,
+            valid=1,
+            br_new=1,
+            hr_new=1,
+            br_centi=1400,
+            hr_centi=7200,
+        )
+        good_frame = encode_frame(EVT_BIO, bio_payload, seq=2)
+
+        ser = FailingSerial(bytes(bad_frame) + good_frame)
+        events = tool._poll_events(ser, bytearray())
+
+        # Only the good frame should be returned
+        assert len(events) == 1
+        assert events[0]["type"] == "bio"
+
+    def test_invalid_payload_skipped_good_frame_returned(self) -> None:
+        """A frame with valid header/CRC but invalid payload is silently dropped."""
+        tool = MmWave()
+
+        # Build a frame with wrong payload length for EVT_BIO (expects 12, give 4)
+        truncated_payload = b"\x01\x02\x03\x04"
+        bad_frame = encode_frame(EVT_BIO, truncated_payload, seq=1)
+
+        # Good frame after
+        bio_payload = _pack_bio(
+            t_ms=300,
+            allowed=1,
+            valid=1,
+            br_new=1,
+            hr_new=1,
+            br_centi=1600,
+            hr_centi=8000,
+        )
+        good_frame = encode_frame(EVT_BIO, bio_payload, seq=2)
+
+        ser = FailingSerial(bad_frame + good_frame)
+        events = tool._poll_events(ser, bytearray())
+
+        assert len(events) == 1
+        assert events[0]["type"] == "bio"
+        assert events[0]["hr"] == pytest.approx(80.0)
+
+    def test_in_waiting_drives_read_size(self) -> None:
+        """When in_waiting > 0, _poll_events reads all available bytes at once."""
+        tool = MmWave()
+        bio_payload = _pack_bio(
+            t_ms=100,
+            allowed=1,
+            valid=1,
+            br_new=1,
+            hr_new=1,
+            br_centi=1400,
+            hr_centi=7200,
+        )
+        frame = bytes(encode_frame(EVT_BIO, bio_payload, seq=1))
+
+        # Track the actual read sizes
+        read_sizes: list[int] = []
+        original_read = FailingSerial.read
+
+        class TrackingSerial(FailingSerial):
+            def read(self, size: int = 1) -> bytes:
+                read_sizes.append(size)
+                return original_read(self, size)
+
+        ser = TrackingSerial(frame)
+        events = tool._poll_events(ser, bytearray())
+
+        assert len(events) == 1
+        # First read should request all available bytes (in_waiting = len(frame))
+        assert read_sizes[0] == len(frame)
+
+    def test_multiple_corrupt_frames_then_good(self) -> None:
+        """Several consecutive corrupt frames are dropped; good frame still decoded."""
+        tool = MmWave()
+
+        bad_frames = bytearray()
+        for i in range(3):
+            f = bytearray(
+                encode_frame(
+                    EVT_STATE,
+                    _pack_state(
+                        t_ms=i * 100,
+                        state_enum=2,
+                        pose_enum=1,
+                        head_moving=0,
+                        human=1,
+                        n_targets=1,
+                        dist_new=1,
+                        dist_mm=350,
+                    ),
+                    seq=i,
+                )
+            )
+            f[-3] ^= 0xFF  # corrupt each one
+            bad_frames.extend(f)
+
+        good_bio = encode_frame(
+            EVT_BIO,
+            _pack_bio(t_ms=500, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1400, hr_centi=7200),
+            seq=10,
+        )
+
+        ser = FailingSerial(bytes(bad_frames) + good_bio)
+        events = tool._poll_events(ser, bytearray())
+
+        assert len(events) == 1
+        assert events[0]["type"] == "bio"
+
+
+# ---------------------------------------------------------------------------
+# _scan_sync / _measure_sync: intermittent reads and dropped frame recovery
+# ---------------------------------------------------------------------------
+
+
+class TestScanSyncDisconnectRecovery:
+    def test_scan_tolerates_empty_reads_between_events(self) -> None:
+        """Empty reads (serial timeouts) between valid frames don't break scan."""
+        tool = MmWave()
+        targets_payload = _pack_targets_single(
+            t_ms=1000,
+            forced_focus=-1,
+            cluster=3,
+            x_mm=100,
+            y_mm=500,
+            r_mm=510,
+            bearing_cdeg=200,
+            v_x10=0,
+        )
+        light_payload = _pack_light(t_ms=1100, valid=1, lux=88.0)
+
+        frame1 = bytes(encode_frame(EVT_TARGETS, targets_payload, seq=1))
+        frame2 = bytes(encode_frame(EVT_LIGHT, light_payload, seq=2))
+
+        # Deliver frame1, then 3 empty reads, then frame2, then disconnect
+        ser = IntermittentSerial(
+            [
+                (frame1, 3),  # frame1 followed by 3 empty reads
+                (frame2, 0),  # frame2 then done
+            ]
+        )
+
+        result = tool._scan_sync(
+            ser,
+            deps=_deps(),
+            tx_state={"seq": 0},
+            rx_buffer=bytearray(),
+            duration_s=0.05,
+            do_sweep=False,
+            focus_cluster=-1,
+            targets_ms=250,
+        )
+
+        assert result["targets_seen"] >= 1
+        assert result["latest_target"] is not None
+        assert result["latest_target"]["cluster"] == 3
+        assert result["light_summary"]["valid_samples"] >= 1
+
+    def test_scan_recovers_from_dropped_frames_mid_stream(self) -> None:
+        """Corrupt frames in the middle of a scan don't prevent later valid data."""
+        tool = MmWave()
+
+        # Good target frame
+        targets_payload = _pack_targets_single(
+            t_ms=1000,
+            forced_focus=-1,
+            cluster=5,
+            x_mm=100,
+            y_mm=500,
+            r_mm=510,
+            bearing_cdeg=200,
+            v_x10=0,
+        )
+        good_target = bytes(encode_frame(EVT_TARGETS, targets_payload, seq=1))
+
+        # Corrupt frame (state with broken CRC)
+        bad_state = bytearray(
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=1100,
+                    state_enum=3,
+                    pose_enum=0,
+                    head_moving=1,
+                    human=1,
+                    n_targets=1,
+                    dist_new=1,
+                    dist_mm=300,
+                ),
+                seq=2,
+            )
+        )
+        bad_state[-3] ^= 0xAA
+
+        # Good light frame after the corruption
+        light_payload = _pack_light(t_ms=1200, valid=1, lux=42.0)
+        good_light = bytes(encode_frame(EVT_LIGHT, light_payload, seq=3))
+
+        # Deliver target, then corrupt frame mixed with good light
+        ser = IntermittentSerial(
+            [
+                (good_target + bytes(bad_state) + good_light, 0),
+            ]
+        )
+
+        result = tool._scan_sync(
+            ser,
+            deps=_deps(),
+            tx_state={"seq": 0},
+            rx_buffer=bytearray(),
+            duration_s=0.05,
+            do_sweep=False,
+            focus_cluster=-1,
+            targets_ms=250,
+        )
+
+        assert result["targets_seen"] >= 1
+        assert result["latest_target"]["cluster"] == 5
+        assert result["light_summary"]["valid_samples"] >= 1
+
+    def test_scan_returns_empty_state_on_all_empty_reads(self) -> None:
+        """Scan with no events at all (pure timeouts) returns clean empty state."""
+        tool = MmWave()
+        ser = IntermittentSerial([])  # no data at all
+
+        result = tool._scan_sync(
+            ser,
+            deps=_deps(),
+            tx_state={"seq": 0},
+            rx_buffer=bytearray(),
+            duration_s=0.01,
+            do_sweep=False,
+            focus_cluster=-1,
+            targets_ms=250,
+        )
+
+        assert result["targets_seen"] == 0
+        assert result["latest_target"] is None
+        assert result["light_summary"]["valid_samples"] == 0
+
+
+class TestMeasureSyncDisconnectRecovery:
+    def test_measure_tolerates_empty_reads_between_events(self) -> None:
+        """Empty reads (serial timeouts) between valid frames don't break measure."""
+        tool = MmWave()
+
+        state_payload = _pack_state(
+            t_ms=100,
+            state_enum=5,
+            pose_enum=1,
+            head_moving=0,
+            human=1,
+            n_targets=1,
+            dist_new=1,
+            dist_mm=400,
+        )
+        bio_payload = _pack_bio(
+            t_ms=200,
+            allowed=1,
+            valid=1,
+            br_new=1,
+            hr_new=1,
+            br_centi=1400,
+            hr_centi=7200,
+        )
+
+        frame1 = bytes(encode_frame(EVT_STATE, state_payload, seq=1))
+        frame2 = bytes(encode_frame(EVT_BIO, bio_payload, seq=2))
+
+        ser = IntermittentSerial(
+            [
+                (frame1, 3),  # state, then 3 empty reads
+                (frame2, 0),  # bio arrives
+            ]
+        )
+
+        result = tool._measure_sync(
+            ser,
+            tx_state={"seq": 0},
+            rx_buffer=bytearray(),
+            focus_cluster=-1,
+            timeout_s=0.05,
+            bio_ms=1000,
+        )
+
+        assert result["success"] is True
+        assert result["valid_bio"]["heart_rate_bpm"] == pytest.approx(72.0)
+        assert result["device_state"] == "RESTING_VITALS"
+
+    def test_measure_recovers_from_dropped_frames_mid_stream(self) -> None:
+        """Corrupt frames between valid bio messages don't prevent success."""
+        tool = MmWave()
+
+        # Invalid bio (not allowed) — will increment attempts but not succeed
+        invalid_bio = bytes(
+            encode_frame(
+                EVT_BIO,
+                _pack_bio(t_ms=100, allowed=0, valid=0, br_new=0, hr_new=0, br_centi=0xFFFF, hr_centi=0xFFFF),
+                seq=1,
+            )
+        )
+
+        # Corrupt frame
+        bad_frame = bytearray(
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=150,
+                    state_enum=4,
+                    pose_enum=1,
+                    head_moving=0,
+                    human=1,
+                    n_targets=1,
+                    dist_new=1,
+                    dist_mm=400,
+                ),
+                seq=2,
+            )
+        )
+        bad_frame[-3] ^= 0xBB
+
+        # Valid bio after corruption
+        good_bio = bytes(
+            encode_frame(
+                EVT_BIO,
+                _pack_bio(t_ms=200, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1600, hr_centi=8000),
+                seq=3,
+            )
+        )
+
+        ser = IntermittentSerial(
+            [
+                (invalid_bio + bytes(bad_frame) + good_bio, 0),
+            ]
+        )
+
+        result = tool._measure_sync(
+            ser,
+            tx_state={"seq": 0},
+            rx_buffer=bytearray(),
+            focus_cluster=-1,
+            timeout_s=0.05,
+            bio_ms=1000,
+        )
+
+        assert result["success"] is True
+        assert result["attempts"] == 2
+        assert result["valid_bio"]["heart_rate_bpm"] == pytest.approx(80.0)
+
+    def test_measure_returns_inconclusive_on_all_empty_reads(self) -> None:
+        """Measure with no events at all returns inconclusive state."""
+        tool = MmWave()
+        ser = IntermittentSerial([])
+
+        result = tool._measure_sync(
+            ser,
+            tx_state={"seq": 0},
+            rx_buffer=bytearray(),
+            focus_cluster=-1,
+            timeout_s=0.01,
+            bio_ms=1000,
+        )
+
+        assert result["success"] is False
+        assert result["attempts"] == 0
+        assert result["valid_bio"] is None
+
+
+# ---------------------------------------------------------------------------
+# Full async __call__ error path tests
+# ---------------------------------------------------------------------------
+
+
+class TestFullCallErrorPaths:
+    @pytest.mark.asyncio
+    async def test_os_error_mid_measure_degrades_gracefully(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OSError after handshake (during measure loop) degrades to measure_inconclusive.
+
+        The _measure_sync loop catches OSError from _poll_events and breaks,
+        returning partial results rather than propagating the error outward.
+        """
+        _patch_serial_modules(monkeypatch, [{"bytes": b""}])
+
+        read_count = 0
+        original_read = FakeSerial.read
+
+        def _read_then_fail(self: Any, size: int = 1) -> bytes:
+            nonlocal read_count
+            read_count += 1
+            # Let the handshake reads succeed (PONG data is in the buffer)
+            if read_count <= len(_HANDSHAKE_PONG):
+                return original_read(self, size)
+            raise OSError("USB device removed")
+
+        monkeypatch.setattr(FakeSerial, "read", _read_then_fail)
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.1)
+
+        # Graceful degradation: returns a normal response, not a crash
+        assert response["status"] == "measure_inconclusive"
+        assert response["measure"]["success"] is False
+        assert response["measure"]["attempts"] == 0
+
+    @pytest.mark.asyncio
+    async def test_scan_with_intermittent_corrupt_frames_still_collects_data(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Full async scan with corrupt frames interleaved still returns valid data."""
+        # Good target frame
+        targets_payload = _pack_targets_single(
+            t_ms=1000,
+            forced_focus=-1,
+            cluster=2,
+            x_mm=100,
+            y_mm=500,
+            r_mm=510,
+            bearing_cdeg=200,
+            v_x10=0,
+        )
+        good_target = encode_frame(EVT_TARGETS, targets_payload, seq=1)
+
+        # Corrupt frame
+        bad = bytearray(
+            encode_frame(
+                EVT_STATE,
+                _pack_state(
+                    t_ms=1100,
+                    state_enum=3,
+                    pose_enum=0,
+                    head_moving=0,
+                    human=1,
+                    n_targets=1,
+                    dist_new=1,
+                    dist_mm=300,
+                ),
+                seq=2,
+            )
+        )
+        bad[-3] ^= 0xFF
+
+        # Good light frame
+        good_light = encode_frame(EVT_LIGHT, _pack_light(t_ms=1200, valid=1, lux=99.0), seq=3)
+
+        stream = good_target + bytes(bad) + good_light
+        _patch_serial_modules(monkeypatch, [{"bytes": stream}])
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="scan", duration_s=0.05, sweep_if_unseen=False)
+
+        assert response["status"] == "scan_done"
+        assert response["scan"]["targets_seen"] >= 1
+        assert response["scan"]["latest_target"]["cluster"] == 2
+        assert response["scan"]["light_summary"]["valid_samples"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_handshake_timeout_returns_version_mismatch_status(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty serial (no handshake response) returns version_mismatch status."""
+        # No handshake pong — timeout
+        _patch_serial_modules(monkeypatch, [{"bytes": b""}], prepend_handshake_pong=False)
+
+        import healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave as mmwave_mod
+
+        monkeypatch.setattr(mmwave_mod, "HANDSHAKE_TIMEOUT_S", 0.05)
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="scan", duration_s=0.1)
+
+        assert response["status"] == "version_mismatch"
+        assert "timeout" in response["error"]
