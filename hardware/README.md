@@ -55,6 +55,7 @@ CRC details:
 - `0x92 EVT_TARGETS`
 - `0x93 EVT_BIO`
 - `0x94 EVT_LIGHT`
+- `0x95 EVT_DIAG`
 
 ---
 
@@ -79,6 +80,8 @@ CRC details:
 ## 4) Telemetry Payload Schemas
 
 ### 4.1 `EVT_STATE` (`0x91`)
+
+Emission: on state change (rate-limited to max once per 200 ms) or at least every 1 second as a heartbeat.
 
 Payload fields:
 - `u32 t_ms`
@@ -145,6 +148,16 @@ Cadence and source:
 Null semantics:
 - When `valid=0`, wire payload sets `lux=NaN`.
 - Python decoders normalize invalid/NaN lux to `None`.
+
+### 4.5 `EVT_DIAG` (`0x95`)
+
+Payload fields:
+- `u32 t_ms` — device uptime (ms since boot)
+- `u32 mmwave_fail_count` — total `mmWave.update()` failures since boot
+- `u16 mmwave_consecutive_fails` — current consecutive failure streak (resets on success)
+- `u16 tx_drop_count` — total COBS/overflow packet drops since boot
+
+Cadence: fixed 10-second interval, emitted regardless of sensor state.
 
 ---
 

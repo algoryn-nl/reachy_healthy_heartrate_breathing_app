@@ -16,6 +16,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
     EVT_BIO,
     CMD_PING,
+    EVT_DIAG,
     EVT_PONG,
     EVT_HELLO,
     EVT_LIGHT,
@@ -105,6 +106,10 @@ def _pack_targets_single(
 
 def _pack_light(*, t_ms: int, valid: int, lux: float) -> bytes:
     return struct.pack("<IBf", t_ms, valid, lux)
+
+
+def _pack_diag(*, t_ms: int, mmw_fails: int, mmw_consec_fails: int, tx_drops: int) -> bytes:
+    return struct.pack("<IIHH", t_ms, mmw_fails, mmw_consec_fails, tx_drops)
 
 
 class FakeSerial:
@@ -2287,3 +2292,170 @@ class TestFullCallErrorPaths:
 
         assert response["status"] == "version_mismatch"
         assert "timeout" in response["error"]
+
+
+# ── EVT_DIAG protocol decode tests ──────────────────────────────────────────
+
+
+class TestDiagDecode:
+    def test_valid_diag_decode(self) -> None:
+        payload = _pack_diag(t_ms=50000, mmw_fails=42, mmw_consec_fails=3, tx_drops=7)
+        ev = decode_event(EVT_DIAG, payload)
+        assert ev["type"] == "diag"
+        assert ev["t_ms"] == 50000
+        assert ev["mmwave_fail_count"] == 42
+        assert ev["mmwave_consecutive_fails"] == 3
+        assert ev["tx_drop_count"] == 7
+
+    def test_diag_bad_payload_length(self) -> None:
+        with pytest.raises(ProtocolError, match="bad diag payload length"):
+            decode_event(EVT_DIAG, b"\x00" * 10)
+
+    def test_diag_bad_payload_length_too_long(self) -> None:
+        with pytest.raises(ProtocolError, match="bad diag payload length"):
+            decode_event(EVT_DIAG, b"\x00" * 14)
+
+    def test_diag_zero_counters(self) -> None:
+        payload = _pack_diag(t_ms=1000, mmw_fails=0, mmw_consec_fails=0, tx_drops=0)
+        ev = decode_event(EVT_DIAG, payload)
+        assert ev["mmwave_fail_count"] == 0
+        assert ev["mmwave_consecutive_fails"] == 0
+        assert ev["tx_drop_count"] == 0
+
+    def test_diag_max_value_counters(self) -> None:
+        payload = _pack_diag(
+            t_ms=0xFFFFFFFF,
+            mmw_fails=0xFFFFFFFF,
+            mmw_consec_fails=0xFFFF,
+            tx_drops=0xFFFF,
+        )
+        ev = decode_event(EVT_DIAG, payload)
+        assert ev["t_ms"] == 0xFFFFFFFF
+        assert ev["mmwave_fail_count"] == 0xFFFFFFFF
+        assert ev["mmwave_consecutive_fails"] == 0xFFFF
+        assert ev["tx_drop_count"] == 0xFFFF
+
+    def test_diag_frame_roundtrip(self) -> None:
+        payload = _pack_diag(t_ms=10000, mmw_fails=5, mmw_consec_fails=2, tx_drops=1)
+        frame = encode_frame(EVT_DIAG, payload, seq=99)
+        assert frame.endswith(b"\x00")
+        version, msg_type, seq, decoded_payload = decode_frame(frame[:-1])
+        assert version == PROTO_VERSION
+        assert msg_type == EVT_DIAG
+        assert seq == 99
+        ev = decode_event(msg_type, decoded_payload)
+        assert ev["type"] == "diag"
+        assert ev["mmwave_fail_count"] == 5
+
+
+# ── EVT_DIAG integration tests ─────────────────────────────────────────────
+
+
+class TestDiagIntegration:
+    @pytest.mark.asyncio
+    async def test_diag_during_scan_surfaces_in_result(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        diag_frame = encode_frame(
+            EVT_DIAG,
+            _pack_diag(t_ms=5000, mmw_fails=10, mmw_consec_fails=0, tx_drops=2),
+            seq=1,
+        )
+        target_frame = encode_frame(
+            EVT_TARGETS,
+            _pack_targets_single(
+                t_ms=5100,
+                forced_focus=-1,
+                cluster=1,
+                x_mm=300,
+                y_mm=0,
+                r_mm=300,
+                bearing_cdeg=0,
+                v_x10=0,
+            ),
+            seq=2,
+        )
+        _patch_serial_modules(monkeypatch, [{"bytes": diag_frame + target_frame}])
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="scan", duration_s=0.05, sweep_if_unseen=False)
+
+        assert response["status"] == "scan_done"
+        diag = response["scan"].get("diagnostics")
+        assert diag is not None
+        assert diag["mmwave_fail_count"] == 10
+        assert diag["mmwave_consecutive_fails"] == 0
+        assert diag["tx_drop_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_diag_during_measure_surfaces_in_result(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        diag_frame = encode_frame(
+            EVT_DIAG,
+            _pack_diag(t_ms=8000, mmw_fails=3, mmw_consec_fails=1, tx_drops=0),
+            seq=1,
+        )
+        bio_frame = encode_frame(
+            EVT_BIO,
+            _pack_bio(t_ms=8100, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1500, hr_centi=7200),
+            seq=2,
+        )
+        _patch_serial_modules(monkeypatch, [{"bytes": diag_frame + bio_frame}])
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.05)
+
+        assert response["status"] == "ok"
+        diag = response["measure"].get("diagnostics")
+        assert diag is not None
+        assert diag["mmwave_fail_count"] == 3
+        assert diag["mmwave_consecutive_fails"] == 1
+        assert diag["tx_drop_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_diag_event_means_no_diagnostics_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target_frame = encode_frame(
+            EVT_TARGETS,
+            _pack_targets_single(
+                t_ms=1000,
+                forced_focus=-1,
+                cluster=1,
+                x_mm=500,
+                y_mm=0,
+                r_mm=500,
+                bearing_cdeg=0,
+                v_x10=0,
+            ),
+            seq=1,
+        )
+        _patch_serial_modules(monkeypatch, [{"bytes": target_frame}])
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="scan", duration_s=0.05, sweep_if_unseen=False)
+
+        assert response["status"] == "scan_done"
+        assert "diagnostics" not in response["scan"]
+
+    @pytest.mark.asyncio
+    async def test_no_diag_event_during_measure_means_no_diagnostics_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bio_frame = encode_frame(
+            EVT_BIO,
+            _pack_bio(t_ms=2000, allowed=1, valid=1, br_new=1, hr_new=1, br_centi=1600, hr_centi=6800),
+            seq=1,
+        )
+        _patch_serial_modules(monkeypatch, [{"bytes": bio_frame}])
+
+        tool = MmWave()
+        response = await tool(_deps(), mode="measure", duration_s=0.05)
+
+        assert response["status"] == "ok"
+        assert "diagnostics" not in response["measure"]

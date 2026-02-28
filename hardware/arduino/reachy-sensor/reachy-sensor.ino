@@ -132,6 +132,7 @@ static const uint8_t EVT_STATE   = 0x91;  // person state snapshot (on change or
 static const uint8_t EVT_TARGETS = 0x92;  // radar target list with focus info (throttled)
 static const uint8_t EVT_BIO     = 0x93;  // heart rate + breathing rate (throttled)
 static const uint8_t EVT_LIGHT   = 0x94;  // ambient light reading in lux (every 1 s)
+static const uint8_t EVT_DIAG    = 0x95;  // diagnostic counters (every 10 s)
 
 // --- ACK status codes (in EVT_ACK payload) ---
 static const uint8_t ACK_OK      = 0;  // command applied as requested
@@ -291,6 +292,7 @@ static float lastHR = NAN;    // last good heart rate (bpm) — expires after VI
 static uint32_t lastBRUpdateMs = 0;  // timestamp of last fresh BR reading
 static uint32_t lastHRUpdateMs = 0;  // timestamp of last fresh HR reading
 static const uint32_t VITALS_CACHE_EXPIRY_MS = 2000;  // max age (ms) before cached vitals are invalidated
+static const uint32_t STATE_MIN_INTERVAL_MS = 200;    // minimum ms between change-triggered EVT_STATE
 
 // --- Presence tracking ---
 static uint32_t lastPresenceMs = 0;    // last millis() when any presence signal was detected
@@ -307,6 +309,15 @@ static uint32_t lastTargetsEmitMs = 0;
 static uint32_t lastBioEmitMs = 0;
 static uint32_t lastStateEmitMs = 0;
 static uint32_t lastLightEmitMs = 0;
+
+// --- Diagnostic counters ---
+// Cumulative health metrics emitted periodically via EVT_DIAG so the host
+// can detect firmware-side failures (FW-HIGH-1, FW-HIGH-2).
+static uint32_t mmwaveFailCount = 0;        // total mmWave.update() failures since boot
+static uint16_t mmwaveConsecutiveFails = 0;  // current consecutive failure streak
+static uint16_t txDropCount = 0;             // total COBS/overflow packet drops since boot
+static uint32_t lastDiagEmitMs = 0;
+static const uint32_t DIAG_MS = 10000;       // diagnostic emission interval (10 s)
 
 // --- Host-controlled settings ---
 // These are modified by host commands (CMD_SET_HM, CMD_SET_FOCUS, etc.)
@@ -533,10 +544,11 @@ static uint16_t toU16ScaledOrNull(float value, float scale) {
 // Packet layout before COBS encoding:
 //   [version:u8] [msgType:u8] [seq:u16] [payloadLen:u16] [payload...] [crc:u16]
 //
-// Silently drops the packet if payload exceeds buffer capacity or COBS
-// encoding overflows (a known limitation — see FW-HIGH-1 in docs/TODO.md).
+// Drops the packet if payload exceeds buffer capacity or COBS encoding
+// overflows, incrementing txDropCount so the host can detect lost frames
+// via EVT_DIAG.
 static void sendFrame(uint8_t msgType, const uint8_t* payload, size_t payloadLen) {
-  if (payloadLen > sizeof(txPayloadBuf)) return;
+  if (payloadLen > sizeof(txPayloadBuf)) { txDropCount++; return; }
 
   size_t pktLen = 0;
   appendU8(txPacketBuf, &pktLen, PROTO_VERSION);
@@ -553,7 +565,7 @@ static void sendFrame(uint8_t msgType, const uint8_t* payload, size_t payloadLen
   appendU16LE(txPacketBuf, &pktLen, crc);
 
   size_t encodedLen = cobsEncode(txPacketBuf, pktLen, txEncodedBuf, sizeof(txEncodedBuf));
-  if (encodedLen == 0) return;
+  if (encodedLen == 0) { txDropCount++; return; }
 
   Serial.write(txEncodedBuf, encodedLen);
   Serial.write((uint8_t)0x00);
@@ -665,6 +677,18 @@ static void emitLight(uint32_t t_ms, bool valid, float lux) {
   appendU8(txPayloadBuf, &n, valid ? 1 : 0);
   appendF32LE(txPayloadBuf, &n, valid ? lux : NAN);
   sendFrame(EVT_LIGHT, txPayloadBuf, n);
+}
+
+// EVT_DIAG: periodic diagnostic counters so the host can detect firmware-side
+// failures (mmWave sensor errors, dropped TX packets).
+// Emitted every DIAG_MS (10 s) regardless of sensor state.
+static void emitDiag(uint32_t t_ms, uint32_t mmwFails, uint16_t mmwConsecFails, uint16_t txDrops) {
+  size_t n = 0;
+  appendU32LE(txPayloadBuf, &n, t_ms);
+  appendU32LE(txPayloadBuf, &n, mmwFails);
+  appendU16LE(txPayloadBuf, &n, mmwConsecFails);
+  appendU16LE(txPayloadBuf, &n, txDrops);
+  sendFrame(EVT_DIAG, txPayloadBuf, n);
 }
 
 // EVT_TARGETS: the list of radar targets (people/objects) currently detected,
@@ -1032,11 +1056,27 @@ void loop() {
     emitLight(lightNow - t0, lightValid, lux);
   }
 
+  // ── Step 2b: Emit diagnostics ──────────────────────────────────────────────
+  // Periodic health counters so the host can detect firmware-side failures.
+  // Runs before mmWave.update() so it fires even during sensor failure streaks.
+  {
+    uint32_t diagNow = millis();
+    if (diagNow - lastDiagEmitMs >= DIAG_MS) {
+      lastDiagEmitMs = diagNow;
+      emitDiag(diagNow - t0, mmwaveFailCount, mmwaveConsecutiveFails, txDropCount);
+    }
+  }
+
   // ── Step 3: Read radar and run state machine ───────────────────────────────
   // mmWave.update() polls the radar's UART. Returns true when a complete
   // data frame has been received and parsed. If false, skip the rest —
   // the previous state remains valid and we'll try again next iteration.
-  if (!mmWave.update(100)) return;
+  if (!mmWave.update(100)) {
+    mmwaveFailCount++;
+    mmwaveConsecutiveFails++;
+    return;
+  }
+  mmwaveConsecutiveFails = 0;  // reset streak on success
 
   // Snapshot the host-controlled head-moving flag (may change mid-cycle
   // via pollHostUsbSerial, but we use a consistent value for this frame).
@@ -1210,9 +1250,12 @@ void loop() {
     emitTargets(t_ms, info, focus);
   }
 
-  // EVT_STATE: on state change or at least every 1 second as a heartbeat.
+  // EVT_STATE: on state change (rate-limited to STATE_MIN_INTERVAL_MS) or
+  // at least every 1 second as a heartbeat. The rate limit caps change-triggered
+  // emissions to max 5/second to prevent host flooding on rapid oscillation.
   bool stateChanged = (s != prevS) || (p != prevP) || (headMoving != prevHM) || (nTargets != prevN);
-  if (stateChanged || (now - lastStateEmitMs > 1000)) {
+  bool intervalOk = (now - lastStateEmitMs >= STATE_MIN_INTERVAL_MS);
+  if ((stateChanged && intervalOk) || (now - lastStateEmitMs > 1000)) {
     lastStateEmitMs = now;
     emitState(t_ms, s, p, headMoving, human, nTargets, dist_cm, dist_ok);
     prevS = s;

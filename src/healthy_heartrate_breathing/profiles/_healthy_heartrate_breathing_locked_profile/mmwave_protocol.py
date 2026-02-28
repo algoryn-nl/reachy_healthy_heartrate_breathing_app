@@ -24,6 +24,7 @@ EVT_STATE = 0x91
 EVT_TARGETS = 0x92
 EVT_BIO = 0x93
 EVT_LIGHT = 0x94
+EVT_DIAG = 0x95
 
 # ACK status codes
 ACK_OK = 0
@@ -335,6 +336,18 @@ def decode_event(msg_type: int, payload: bytes) -> dict[str, Any]:
             "focus": focus,
             "targets": targets,
             "targets_truncated": bool(flags & FLAG_TARGETS_TRUNCATED),
+        }
+
+    if msg_type == EVT_DIAG:
+        if len(payload) != 12:
+            raise ProtocolError("bad diag payload length")
+        t_ms, mmw_fails, mmw_consec_fails, tx_drops = struct.unpack("<IIHH", payload)
+        return {
+            "type": "diag",
+            "t_ms": t_ms,
+            "mmwave_fail_count": mmw_fails,
+            "mmwave_consecutive_fails": mmw_consec_fails,
+            "tx_drop_count": tx_drops,
         }
 
     return {"type": "unknown", "msg_type": msg_type, "payload": payload}

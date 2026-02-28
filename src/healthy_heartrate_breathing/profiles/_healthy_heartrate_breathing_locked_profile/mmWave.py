@@ -273,10 +273,7 @@ class MmWave(Tool):
 
                 if version == PROTO_VERSION:
                     return None  # success
-                return (
-                    f"protocol version mismatch: device sent v{version}, "
-                    f"host expects v{PROTO_VERSION}"
-                )
+                return f"protocol version mismatch: device sent v{version}, host expects v{PROTO_VERSION}"
 
         return "handshake timeout: no response from device"
 
@@ -476,6 +473,7 @@ class MmWave(Tool):
             "device_state": None,
             "telemetry": [],
         }
+        latest_diag: dict[str, Any] | None = None
         timeout = time.monotonic() + max(0.5, duration_s)
         if do_sweep:
             self._queue_short_sweep(deps)
@@ -520,6 +518,8 @@ class MmWave(Tool):
                 if msg_type == "state":
                     state["state"] = msg.get("state")
                     state["device_state"] = msg.get("state")
+                elif msg_type == "diag":
+                    latest_diag = msg
                 if msg_type == "light":
                     state["light_samples"].append(msg)
                     lux = msg.get("lux")
@@ -533,6 +533,12 @@ class MmWave(Tool):
             if stop_when_target_found and state["latest_target"] is not None:
                 break
 
+        if latest_diag:
+            state["diagnostics"] = {
+                "mmwave_fail_count": latest_diag["mmwave_fail_count"],
+                "mmwave_consecutive_fails": latest_diag["mmwave_consecutive_fails"],
+                "tx_drop_count": latest_diag["tx_drop_count"],
+            }
         if state["recent_targets"]:
             unique = []
             for target in state["recent_targets"]:
@@ -563,6 +569,7 @@ class MmWave(Tool):
             "valid_bio": None,
             "success": False,
         }
+        latest_diag: dict[str, Any] | None = None
 
         try:
             if focus_cluster >= 0:
@@ -587,6 +594,8 @@ class MmWave(Tool):
                 if msg_type == "state":
                     result["state"] = msg
                     result["device_state"] = msg.get("state")
+                elif msg_type == "diag":
+                    latest_diag = msg
                 if msg_type == "bio":
                     result["attempts"] += 1
                     result["latest_bio"] = msg
@@ -604,6 +613,12 @@ class MmWave(Tool):
                             "br_new": msg.get("br_new"),
                         }
                         result["light_summary"] = self._summarize_light(result["light_samples"])
+                        if latest_diag:
+                            result["diagnostics"] = {
+                                "mmwave_fail_count": latest_diag["mmwave_fail_count"],
+                                "mmwave_consecutive_fails": latest_diag["mmwave_consecutive_fails"],
+                                "tx_drop_count": latest_diag["tx_drop_count"],
+                            }
                         return result
                 if msg_type == "light":
                     result["light_samples"].append(msg)
@@ -615,6 +630,12 @@ class MmWave(Tool):
                             "lux": float(lux),
                         }
         result["light_summary"] = self._summarize_light(result["light_samples"])
+        if latest_diag:
+            result["diagnostics"] = {
+                "mmwave_fail_count": latest_diag["mmwave_fail_count"],
+                "mmwave_consecutive_fails": latest_diag["mmwave_consecutive_fails"],
+                "tx_drop_count": latest_diag["tx_drop_count"],
+            }
         return result
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:

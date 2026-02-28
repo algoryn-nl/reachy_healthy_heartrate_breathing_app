@@ -206,7 +206,7 @@ The project includes a custom hardware component under `hardware/`.
 **Binary protocol** (`MMWAVE_PROTO_V1`): fully documented in `hardware/README.md`
 - Transport: COBS-framed packets terminated by `0x00`, CRC-16/CCITT-FALSE verified, little-endian
 - Host commands: `CMD_SET_HM` (head-moving mode), `CMD_SET_FOCUS` (target cluster), `CMD_SET_BIO_MS`/`CMD_SET_TARGETS_MS` (telemetry cadence), `CMD_PING`
-- Device events: `EVT_STATE`, `EVT_TARGETS` (up to 8 targets with x/y/r/bearing/velocity), `EVT_BIO` (heart rate + breath rate in centi-bpm), `EVT_LIGHT` (lux as f32), `EVT_ACK`/`EVT_ERR`/`EVT_PONG`/`EVT_HELLO`
+- Device events: `EVT_STATE` (rate-limited to 200ms min interval on change), `EVT_TARGETS` (up to 8 targets with x/y/r/bearing/velocity), `EVT_BIO` (heart rate + breath rate in centi-bpm), `EVT_LIGHT` (lux as f32), `EVT_DIAG` (diagnostic counters every 10s: mmWave fail count, consecutive fails, TX drops), `EVT_ACK`/`EVT_ERR`/`EVT_PONG`/`EVT_HELLO`
 
 **Paired Python components** (firmware and host must match):
 - Protocol codec: `profiles/_healthy_heartrate_breathing_locked_profile/mmwave_protocol.py` — encode/decode frames, COBS, CRC
@@ -442,7 +442,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (301 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, device_context integration, and full openai_realtime coverage)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (311 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, device_context integration, EVT_DIAG diagnostics decode and integration, and full openai_realtime coverage)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

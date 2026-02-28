@@ -23,9 +23,9 @@
 - [ ] **PY-HIGH-4**: Fix HeadWobbler TOCTOU race — lock before generation check; fix queue drain in `reset()` (`audio/head_wobbler.py:78-81,156-165`)
 - [ ] **PY-HIGH-5**: Guard `MovementManager.start()` against thread leak — check `_thread.is_alive()` before creating new thread (`moves.py:766-771`)
 - [ ] **PY-HIGH-6**: Fix type annotation `robot: ReachyMini = None` → `robot: ReachyMini | None = None` (`main.py:39`)
-- [ ] **FW-HIGH-1**: Handle COBS encode overflow — send `EVT_ERR` or increment diagnostic counter instead of silent drop (`reachy-sensor.ino`)
-- [ ] **FW-HIGH-2**: Add sensor error telemetry — expose mmWave `update()` failure count to host (`reachy-sensor.ino`)
-- [ ] **FW-HIGH-3**: Rate-limit state telemetry — cap `EVT_STATE` emission frequency to prevent flood on oscillation (`reachy-sensor.ino`)
+- [x] **FW-HIGH-1**: Handle COBS encode overflow — increment `txDropCount` diagnostic counter on silent drop; surfaced via EVT_DIAG (`reachy-sensor.ino`) (2026-02-28)
+- [x] **FW-HIGH-2**: Add sensor error telemetry — `mmwaveFailCount`/`mmwaveConsecutiveFails` counters + periodic EVT_DIAG emission (`reachy-sensor.ino`) (2026-02-28)
+- [x] **FW-HIGH-3**: Rate-limit state telemetry — 200 ms minimum interval between change-triggered EVT_STATE emissions (`reachy-sensor.ino`) (2026-02-28)
 
 ### Upcoming — Medium Priority
 
