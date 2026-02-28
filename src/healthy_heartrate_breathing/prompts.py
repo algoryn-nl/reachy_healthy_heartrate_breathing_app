@@ -1,9 +1,8 @@
 import re
-import sys
 import logging
 from pathlib import Path
 
-from healthy_heartrate_breathing.config import DEFAULT_PROFILES_DIRECTORY, config
+from healthy_heartrate_breathing.config import DEFAULT_PROFILES_DIRECTORY, ConfigError, config
 
 
 logger = logging.getLogger(__name__)
@@ -82,13 +81,12 @@ def get_session_instructions() -> str:
                 # Expand [<name>] placeholders with content from prompts library
                 expanded_instructions = _expand_prompt_includes(instructions)
                 return expanded_instructions
-            logger.error(f"Profile '{profile}' has empty {INSTRUCTIONS_FILENAME}")
-            sys.exit(1)
-        logger.error(f"Profile {profile} has no {INSTRUCTIONS_FILENAME}")
-        sys.exit(1)
+            raise ConfigError(f"Profile '{profile}' has empty {INSTRUCTIONS_FILENAME}")
+        raise ConfigError(f"Profile '{profile}' has no {INSTRUCTIONS_FILENAME} in {instructions_file.parent}")
+    except ConfigError:
+        raise
     except Exception as e:
-        logger.error(f"Failed to load instructions from profile '{profile}': {e}")
-        sys.exit(1)
+        raise ConfigError(f"Failed to load instructions from profile '{profile}': {e}") from e
 
 
 def get_session_voice(default: str = "cedar") -> str:

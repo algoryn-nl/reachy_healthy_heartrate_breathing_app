@@ -1,11 +1,14 @@
 import os
-import sys
 import logging
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
 from healthy_heartrate_breathing.env_utils import env_flag
+
+
+class ConfigError(RuntimeError):
+    """Raised when required configuration is missing or invalid."""
 
 
 # Locked profile: set to a profile name (e.g., "astronomer") to lock the app
@@ -57,11 +60,9 @@ if LOCKED_PROFILE is not None:
     _profile_path = _profiles_dir / LOCKED_PROFILE
     _instructions_file = _profile_path / "instructions.txt"
     if not _profile_path.is_dir():
-        print(f"Error: LOCKED_PROFILE '{LOCKED_PROFILE}' does not exist in {_profiles_dir}", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError(f"LOCKED_PROFILE '{LOCKED_PROFILE}' does not exist in {_profiles_dir}")
     if not _instructions_file.is_file():
-        print(f"Error: LOCKED_PROFILE '{LOCKED_PROFILE}' has no instructions.txt", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError(f"LOCKED_PROFILE '{LOCKED_PROFILE}' has no instructions.txt in {_profile_path}")
 
 _skip_dotenv = env_flag("REACHY_MINI_SKIP_DOTENV", default=False)
 

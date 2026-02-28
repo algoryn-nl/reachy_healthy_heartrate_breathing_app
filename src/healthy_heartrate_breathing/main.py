@@ -43,11 +43,16 @@ def run(
 ) -> None:
     """Run the Reachy Mini conversation app."""
     # Putting these dependencies here makes the dashboard faster to load when the conversation app is installed
-    from healthy_heartrate_breathing.moves import MovementManager
-    from healthy_heartrate_breathing.console import LocalStream
-    from healthy_heartrate_breathing.openai_realtime import OpenaiRealtimeHandler
-    from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
-    from healthy_heartrate_breathing.audio.head_wobbler import HeadWobbler
+    try:
+        from healthy_heartrate_breathing.moves import MovementManager
+        from healthy_heartrate_breathing.console import LocalStream
+        from healthy_heartrate_breathing.openai_realtime import OpenaiRealtimeHandler
+        from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
+        from healthy_heartrate_breathing.audio.head_wobbler import HeadWobbler
+    except Exception as e:
+        # ConfigError (or other import-time failures) from config/prompts validation
+        print(f"Fatal: {e}", file=sys.stderr)
+        sys.exit(1)
 
     logger = setup_logger(args.debug)
     logger.info("Starting Reachy Mini Conversation App")

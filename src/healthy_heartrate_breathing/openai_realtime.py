@@ -197,7 +197,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             try:
                 instructions = get_session_instructions()
                 voice = get_session_voice()
-            except BaseException as e:  # catch SystemExit from prompt loader without crashing
+            except Exception as e:
                 logger.error("Failed to resolve personality content: %s", e)
                 return f"Failed to apply personality: {e}"
 
