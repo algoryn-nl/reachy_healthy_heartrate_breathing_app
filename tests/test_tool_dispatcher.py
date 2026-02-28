@@ -556,3 +556,53 @@ class TestDeviceContextInjection:
         await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-e", is_idle=False)
         sent_json = json.loads(send_result.call_args[0][1])
         assert "device_context" not in sent_json
+
+
+class TestAutoLightContextTimeout:
+    @pytest.mark.asyncio
+    async def test_light_context_timeout_does_not_block_result(self, tmp_path) -> None:
+        """When auto light_context hangs, it times out and the mmWave result is still sent."""
+        mmwave_result = {
+            "scan": {
+                "latest_target": {"x": 1.0, "y": 2.0, "r": 0.5},
+                "light_summary": {"latest_lux": 100.0, "valid_samples": 1},
+            },
+            "status": "scan_done",
+        }
+
+        call_count = 0
+
+        async def slow_dispatch(name: str, args: str) -> dict:
+            nonlocal call_count
+            call_count += 1
+            if name == "light_context":
+                await asyncio.sleep(60)  # hangs
+                return {"context_state": "normal"}
+            return mmwave_result
+
+        send_result = AsyncMock()
+        orchestrator = LightOrchestrator(
+            enabled=True,
+            analytics_enabled=False,
+            user_id="test",
+            baseline_path=tmp_path / "baseline.json",
+            analytics_path=tmp_path / "analytics.jsonl",
+        )
+        d = _dispatcher(
+            tmp_path,
+            dispatch_tool=slow_dispatch,
+            send_tool_result=send_result,
+            light_orchestrator=orchestrator,
+            has_tool=lambda name: name in {"mmWave", "light_context"},
+            timeout_s=0.1,
+        )
+
+        d.dispatch(tool_name="mmWave", args_json='{"mode":"scan"}', call_id="call-lc", is_idle=False)
+        await asyncio.sleep(0.5)
+
+        # The result should still have been sent despite light_context timeout
+        assert send_result.called
+        sent_json = json.loads(send_result.call_args[0][1])
+        assert sent_json["status"] == "scan_done"
+        # light_context should NOT be in the result (it timed out)
+        assert "light_context" not in sent_json

@@ -36,7 +36,7 @@ def main() -> None:
 
 def run(
     args: argparse.Namespace,
-    robot: ReachyMini = None,
+    robot: ReachyMini | None = None,
     app_stop_event: Optional[threading.Event] = None,
     settings_app: Optional[FastAPI] = None,
     instance_path: Optional[str] = None,

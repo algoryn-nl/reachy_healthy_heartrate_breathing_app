@@ -19,10 +19,10 @@
 
 - [x] **PY-HIGH-1**: Wrap `base64.b64decode()` in try/except in `audio_router.py:41` (2026-02-28)
 - [ ] **PY-HIGH-2**: Add locking to tool registry globals in `tools/core_tools.py:38-40`
-- [ ] **PY-HIGH-3**: Add independent `asyncio.wait_for()` timeout to auto light_context dispatch in `tool_dispatcher.py:397-411`
+- [x] **PY-HIGH-3**: Add independent `asyncio.wait_for()` timeout to auto light_context dispatch in `tool_dispatcher.py:397-411` (2026-02-28)
 - [ ] **PY-HIGH-4**: Fix HeadWobbler TOCTOU race — lock before generation check; fix queue drain in `reset()` (`audio/head_wobbler.py:78-81,156-165`)
 - [ ] **PY-HIGH-5**: Guard `MovementManager.start()` against thread leak — check `_thread.is_alive()` before creating new thread (`moves.py:766-771`)
-- [ ] **PY-HIGH-6**: Fix type annotation `robot: ReachyMini = None` → `robot: ReachyMini | None = None` (`main.py:39`)
+- [x] **PY-HIGH-6**: Fix type annotation `robot: ReachyMini = None` → `robot: ReachyMini | None = None` (`main.py:39`) (2026-02-28)
 - [x] **FW-HIGH-1**: Handle COBS encode overflow — increment `txDropCount` diagnostic counter on silent drop; surfaced via EVT_DIAG (`reachy-sensor.ino`) (2026-02-28)
 - [x] **FW-HIGH-2**: Add sensor error telemetry — `mmwaveFailCount`/`mmwaveConsecutiveFails` counters + periodic EVT_DIAG emission (`reachy-sensor.ino`) (2026-02-28)
 - [x] **FW-HIGH-3**: Rate-limit state telemetry — 200 ms minimum interval between change-triggered EVT_STATE emissions (`reachy-sensor.ino`) (2026-02-28)

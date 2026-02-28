@@ -387,18 +387,21 @@ class ToolDispatcher:
             else:
                 self._idle_policy.record_inconclusive()
 
-        # Auto light_context after mmWave
+        # Auto light_context after mmWave (independent timeout)
         if tool_name == "mmWave" and isinstance(tool_result, dict):
             try:
 
                 async def _dispatch_light(name: str, args_json_str: str) -> dict[str, Any]:
                     return await self._dispatch_tool(name, args_json_str)
 
-                auto_light_context = await self._light_orchestrator.run_from_mmwave(
-                    tool_result,
-                    is_idle=is_idle,
-                    has_tool=self._has_tool("light_context"),
-                    dispatch_fn=_dispatch_light,
+                auto_light_context = await asyncio.wait_for(
+                    self._light_orchestrator.run_from_mmwave(
+                        tool_result,
+                        is_idle=is_idle,
+                        has_tool=self._has_tool("light_context"),
+                        dispatch_fn=_dispatch_light,
+                    ),
+                    timeout=self._timeout_s,
                 )
                 if auto_light_context is not None:
                     tool_result["light_context"] = auto_light_context
@@ -407,6 +410,8 @@ class ToolDispatcher:
                         auto_light_context.get("context_state"),
                         auto_light_context.get("recommended_mode"),
                     )
+            except asyncio.TimeoutError:
+                logger.warning("Auto light_context timed out after %.1fs", self._timeout_s)
             except Exception as e:
                 logger.warning("Auto light_context failed after mmWave: %s", e)
 
