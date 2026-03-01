@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 import json
+import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock
@@ -415,60 +416,104 @@ class TestAnalyticsPermissions:
         assert not analytics_path.exists()
 
 
-class TestAnalyticsRotation:
-    """Verify analytics JSONL file rotation when size cap is exceeded."""
+class TestAnalyticsSqlite:
+    """Verify analytics SQLite storage, retention, and error handling."""
 
-    def test_rotation_triggers_when_file_exceeds_max_bytes(self, tmp_path: Path) -> None:
-        analytics_path = tmp_path / "analytics.jsonl"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=500)
-        # Write enough events to exceed 500 bytes multiple times
-        for i in range(10):
-            o._append_analytics_event(source_tool="test", lux=float(i), result={"context_state": "bright"})
-        assert analytics_path.exists()
-        backup = analytics_path.parent / (analytics_path.name + ".1")
-        assert backup.exists()
-        # Without rotation, 10 events would be ~3000+ bytes; with rotation the main
-        # file holds at most one cap-cycle worth of events (cap + one event overhead)
-        assert analytics_path.stat().st_size < 500 * 3
-
-    def test_rotation_overwrites_previous_backup(self, tmp_path: Path) -> None:
-        analytics_path = tmp_path / "analytics.jsonl"
-        backup = analytics_path.parent / (analytics_path.name + ".1")
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=300)
-        # First rotation
-        for i in range(10):
-            o._append_analytics_event(source_tool="test", lux=float(i), result={"context_state": "a"})
-        assert backup.exists()
-        first_backup_content = backup.read_text(encoding="utf-8")
-        # Second rotation — backup should be replaced
-        for i in range(10):
-            o._append_analytics_event(source_tool="test", lux=float(i + 100), result={"context_state": "b"})
-        second_backup_content = backup.read_text(encoding="utf-8")
-        assert second_backup_content != first_backup_content
-
-    def test_no_rotation_when_under_cap(self, tmp_path: Path) -> None:
-        analytics_path = tmp_path / "analytics.jsonl"
-        o = _orchestrator(
-            tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=1_000_000
+    def test_event_inserted_and_queryable(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "analytics.db"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        o._append_analytics_event(
+            source_tool="test",
+            lux=142.5,
+            result={
+                "context_state": "bright_active",
+                "recommended_mode": "active",
+                "recommended_actions": ["use_action_oriented_prompts", "normal_interruption_policy"],
+                "confidence": 0.7,
+                "cooldown_hint_s": 120,
+                "reason_codes": ["bright_daytime"],
+                "observations": {
+                    "lux": 142.5,
+                    "lux_delta_60s": 3.2,
+                    "local_hour": 14,
+                    "is_night": False,
+                    "presence_detected": True,
+                    "active_interaction": True,
+                    "low_light_duration_min": 0.0,
+                    "prefers_dim": False,
+                    "light_sensitive": False,
+                    "allow_wellness_nudges": True,
+                },
+            },
         )
-        o._append_analytics_event(source_tool="test", lux=42.0, result={"context_state": "dim"})
-        backup = analytics_path.parent / (analytics_path.name + ".1")
-        assert not backup.exists()
-        assert analytics_path.exists()
-        lines = analytics_path.read_text(encoding="utf-8").strip().split("\n")
-        assert len(lines) == 1
+        assert db_path.exists()
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT context_state, lux, recommended_actions, reason_codes, obs_local_hour FROM light_events"
+        ).fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "bright_active"
+        assert rows[0][1] == 142.5
+        assert rows[0][2] == "use_action_oriented_prompts,normal_interruption_policy"
+        assert rows[0][3] == "bright_daytime"
+        assert rows[0][4] == 14
 
-    def test_rotation_preserves_new_event_after_rotate(self, tmp_path: Path) -> None:
-        analytics_path = tmp_path / "analytics.jsonl"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=200)
-        for i in range(10):
-            o._append_analytics_event(source_tool="test", lux=float(i), result={"context_state": "x"})
-        # After rotation, main file should contain at least the last event
-        content = analytics_path.read_text(encoding="utf-8").strip()
-        assert len(content) > 0
-        last_line = content.split("\n")[-1]
-        parsed = json.loads(last_line)
-        assert parsed["event"] == "light_context_decision"
+    def test_retention_prunes_old_rows(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "analytics.db"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path, analytics_max_age_days=1)
+        # Insert a recent event
+        o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "bright"})
+        # Manually insert an old event (200 days ago)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT INTO light_events (timestamp, user_id, source_tool, context_state) VALUES (?, ?, ?, ?)",
+            (old_ts, "test-user", "test", "old"),
+        )
+        conn.commit()
+        conn.close()
+        # Trigger prune by writing another event (prune runs on init)
+        o2 = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path, analytics_max_age_days=1)
+        o2._append_analytics_event(source_tool="test", lux=200.0, result={"context_state": "dim"})
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute("SELECT context_state FROM light_events ORDER BY id").fetchall()
+        conn.close()
+        states = [r[0] for r in rows]
+        assert "old" not in states
+        assert "bright" in states
+        assert "dim" in states
+
+    def test_db_created_lazily_on_first_write(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "analytics.db"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        assert not db_path.exists()
+        o._append_analytics_event(source_tool="test", lux=50.0, result={})
+        assert db_path.exists()
+
+    def test_disabled_analytics_no_db(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "analytics.db"
+        o = _orchestrator(tmp_path, analytics_enabled=False, analytics_path=db_path)
+        o._append_analytics_event(source_tool="test", lux=100.0, result={})
+        assert not db_path.exists()
+
+    def test_db_write_failure_does_not_raise(self, tmp_path: Path) -> None:
+        # Point analytics_path to a directory (not a file) to force sqlite3 error
+        bad_path = tmp_path / "not_a_file"
+        bad_path.mkdir()
+        db_path = bad_path / "sub" / "analytics.db"
+        # Make parent unwritable after creation
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        o._append_analytics_event(source_tool="test", lux=100.0, result={})
+        assert db_path.exists()
+        bad_path.chmod(0o555)
+        try:
+            # Write to a new path that can't be created
+            o2 = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=bad_path / "locked" / "analytics.db")
+            o2._append_analytics_event(source_tool="test", lux=200.0, result={})
+            # Should not raise
+        finally:
+            bad_path.chmod(0o755)
 
 
 class TestPruneStaleEdgeCases:
