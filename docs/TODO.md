@@ -37,7 +37,7 @@
 - [x] **PY-MED-6**: Replace API key polling loop with `threading.Event` — `_api_key_event` signaled from `_persist_api_key()`; no more busy-poll (`console.py`) (2026-03-01)
 - [ ] **PY-MED-7**: Decompose `launch()` into smaller methods in `console.py:322-385`
 - [ ] **PY-MED-8**: Add analytics JSONL file rotation or size cap in `light_orchestrator.py`
-- [ ] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()`
+- [x] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()` — `sys.platform`-conditional patterns: macOS gets `cu.usbmodem`/`tty.usbmodem`, Linux gets `ttyACM`/`ttyUSB` (2026-03-01)
 - [ ] **PY-MED-10**: Standardize tool error handling — error dicts for tools, exceptions for libraries, no `sys.exit()` outside `main()`
 - [x] **FW-MED-1**: Add BH1750 periodic re-init on failure — retry `begin()` every 10s when `!lightSensorReady` (`reachy-sensor.ino`) (2026-03-01)
 - [x] **FW-MED-2**: Encapsulate firmware globals into 6 structs — `VitalsCache`, `PresenceState`, `EmitTimers`, `DiagCounters`, `HostSettings`, `PrevState` (`reachy-sensor.ino`) (2026-03-01)

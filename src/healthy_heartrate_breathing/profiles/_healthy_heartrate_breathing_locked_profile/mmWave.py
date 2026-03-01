@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import os
+import sys
 import glob
 import time
 import asyncio
@@ -154,14 +155,15 @@ class MmWave(Tool):
             logger.warning("No VID/PID candidate responded to probe, using first: %s", candidates[0])
             return candidates[0]
 
-        # Tier 2: Glob fallback
+        # Tier 2: Glob fallback — platform-appropriate patterns
         logger.warning("No VID/PID match found, falling back to glob-based detection")
-        glob_candidates = sorted(
-            glob.glob("/dev/cu.usbmodem*")
-            + glob.glob("/dev/tty.usbmodem*")
-            + glob.glob("/dev/ttyUSB*")
-            + glob.glob("/dev/ttyACM*")
-        )
+        if sys.platform == "darwin":
+            patterns = ["/dev/cu.usbmodem*", "/dev/tty.usbmodem*"]
+        elif sys.platform == "linux":
+            patterns = ["/dev/ttyACM*", "/dev/ttyUSB*"]
+        else:
+            patterns = ["/dev/ttyACM*", "/dev/ttyUSB*", "/dev/cu.usbmodem*", "/dev/tty.usbmodem*"]
+        glob_candidates = sorted(path for pattern in patterns for path in glob.glob(pattern))
 
         if not glob_candidates:
             raise RuntimeError("No mmWave serial port found. Set MMWAVE_SERIAL_PORT.")
