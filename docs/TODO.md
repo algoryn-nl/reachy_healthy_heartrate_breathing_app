@@ -39,11 +39,11 @@
 - [ ] **PY-MED-8**: Add analytics JSONL file rotation or size cap in `light_orchestrator.py`
 - [ ] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()`
 - [ ] **PY-MED-10**: Standardize tool error handling — error dicts for tools, exceptions for libraries, no `sys.exit()` outside `main()`
-- [ ] **FW-MED-1**: Add BH1750 periodic re-init on failure in `setup()`/`loop()`
+- [x] **FW-MED-1**: Add BH1750 periodic re-init on failure — retry `begin()` every 10s when `!lightSensorReady` (`reachy-sensor.ino`) (2026-03-01)
 - [ ] **FW-MED-2**: Encapsulate firmware globals into structs (presence, vitals, timing groups)
-- [ ] **FW-MED-3**: Document buffer sizing rationale; add overflow assertions for `emitTargets()`
+- [x] **FW-MED-3**: Document buffer sizing rationale; add `static_assert` for `txPayloadBuf` vs `MAX_TARGETS_WIRE` (`reachy-sensor.ino`) (2026-03-01)
 - [ ] **FW-MED-4**: Add `CMD_SET_GUARD_RAILS` for runtime-configurable BR/HR/distance thresholds
-- [ ] **FW-MED-5**: Add hysteresis to `guessPose()` distance threshold (55 cm)
+- [x] **FW-MED-5**: Add hysteresis to `guessPose()` — ±5cm dead zone (50–60cm), holds previous pose in band (`reachy-sensor.ino`) (2026-03-01)
 
 ### Upcoming — Low Priority
 

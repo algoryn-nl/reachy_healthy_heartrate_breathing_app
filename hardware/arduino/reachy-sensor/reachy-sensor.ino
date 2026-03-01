@@ -188,8 +188,8 @@ enum class PersonState : uint8_t {
 // should be treated as a hint, not a reliable classification.
 enum class PoseGuess : uint8_t {
   UNKNOWN  = 0,  // no target or invalid distance
-  SITTING  = 1,  // distance < SIT_STAND_THRESHOLD_CM (55 cm)
-  STANDING = 2   // distance >= SIT_STAND_THRESHOLD_CM
+  SITTING  = 1,  // distance < SIT_STAND_LOWER_CM (50 cm), with hysteresis
+  STANDING = 2   // distance >= SIT_STAND_UPPER_CM (60 cm), with hysteresis
 };
 
 // FocusTarget: the single radar target that the firmware has selected for
@@ -258,9 +258,12 @@ static const uint8_t HUMAN_STABLE_FALLBACK_CONFIRM = 3;
 static const uint32_t TARGET_LOSS_GRACE_MS = 1200;
 
 // --- Pose heuristic ---
-// Simple distance-based guess: closer = sitting at a desk, farther = standing.
-// Treat this as a rough hint, not a reliable classification.
-static const float SIT_STAND_THRESHOLD_CM = 55.0f;
+// Distance-based guess with hysteresis to prevent flicker near the boundary.
+// SITTING→STANDING requires crossing the upper threshold (60 cm).
+// STANDING→SITTING requires dropping below the lower threshold (50 cm).
+// In the dead zone (50–60 cm) the previous pose is held.
+static const float SIT_STAND_UPPER_CM = 60.0f;  // must exceed to transition to STANDING
+static const float SIT_STAND_LOWER_CM = 50.0f;  // must drop below to transition to SITTING
 
 // --- Telemetry emission throttles (milliseconds) ---
 // These set the minimum interval between consecutive events of each type.
@@ -269,8 +272,9 @@ static const uint32_t TARGETS_MS_DEFAULT = 250;   // radar target list
 static const uint32_t BIO_MS_DEFAULT     = 1000;  // heart/breath rate
 static const uint32_t LIGHT_MS_DEFAULT   = 1000;  // ambient light
 
-// --- Light sensor I2C address ---
-static const uint8_t BH1750_I2C_ADDR = 0x23;  // ADDR pin LOW (default)
+// --- Light sensor I2C address and recovery ---
+static const uint8_t BH1750_I2C_ADDR = 0x23;        // ADDR pin LOW (default)
+static const uint32_t LIGHT_RETRY_MS = 10000;        // retry BH1750 init every 10 s on failure
 
 // ============================================================================
 // Global state
@@ -322,7 +326,8 @@ static const uint32_t DIAG_MS = 10000;       // diagnostic emission interval (10
 // --- Host-controlled settings ---
 // These are modified by host commands (CMD_SET_HM, CMD_SET_FOCUS, etc.)
 static bool hostHeadMoving = false;     // true when the robot head is in motion (suppresses vitals)
-static bool lightSensorReady = false;   // set once in setup() if BH1750 initializes successfully
+static bool lightSensorReady = false;   // true when BH1750 is initialized; retried periodically if false
+static uint32_t lastLightRetryMs = 0;  // last millis() when BH1750 re-init was attempted
 static int forcedFocusCluster = -1;     // host-requested cluster index (-1 = auto-select closest)
 
 // --- Configurable emission intervals (host can change via CMD_SET_BIO_MS / CMD_SET_TARGETS_MS) ---
@@ -338,9 +343,15 @@ static bool prevHM = false;  // previous head-moving flag
 static int prevN = -1;       // previous target count
 
 // --- Serial protocol buffers ---
-// COBS encoding expands data by at most 1 byte per 254, plus overhead.
-// Buffer sizes are chosen to accommodate the largest possible packet
-// (EVT_TARGETS with MAX_TARGETS_WIRE entries) with comfortable margin.
+// COBS encoding expands data by at most 1 byte per 254, plus a delimiter.
+//
+// Buffer sizing rationale (worst case = EVT_TARGETS at MAX_TARGETS_WIRE):
+//   Payload:  22 header bytes + MAX_TARGETS_WIRE(8) * 12 bytes/target = 118 bytes
+//   Packet:   1 (version) + 1 (type) + 2 (seq) + 118 (payload) + 2 (CRC) = 124 bytes
+//   COBS:     124 + ceil(124/254) + 1 (delimiter) = 126 bytes
+//
+// All buffers use 384+ bytes, giving >3x headroom over worst case.
+// If MAX_TARGETS_WIRE increases, the static_assert below will catch overflow.
 static uint8_t rxEncodedBuf[384];   // incoming COBS-encoded bytes (accumulated until 0x00 delimiter)
 static size_t rxEncodedLen = 0;     // current fill level of rxEncodedBuf
 static bool rxOverflow = false;     // true if incoming frame exceeded buffer capacity
@@ -350,6 +361,14 @@ static uint8_t txPacketBuf[512];    // outgoing packet before COBS encoding (hea
 static uint8_t txEncodedBuf[640];   // COBS-encoded output (txPacketBuf expands slightly)
 static uint8_t txPayloadBuf[384];   // scratch space for building event payloads
 
+// Compile-time check: txPayloadBuf must fit the largest possible payload (EVT_TARGETS).
+static const size_t EVT_TARGETS_HEADER_BYTES = 22;   // t_ms(4) + forcedCluster(2) + focus(12) + flags(1) + nWire(1)
+static const size_t EVT_TARGETS_PER_TARGET   = 12;   // cluster(2) + x(2) + y(2) + r(2) + bearing(2) + v(2)
+static_assert(
+  sizeof(txPayloadBuf) >= EVT_TARGETS_HEADER_BYTES + MAX_TARGETS_WIRE * EVT_TARGETS_PER_TARGET,
+  "txPayloadBuf too small for MAX_TARGETS_WIRE targets — increase buffer or reduce MAX_TARGETS_WIRE"
+);
+
 // ============================================================================
 // Small helpers
 // ============================================================================
@@ -357,11 +376,15 @@ static uint8_t txPayloadBuf[384];   // scratch space for building event payloads
 // Returns true if v is a real positive number (not NaN, not Inf, not zero/negative).
 static bool isFinitePositive(float v) { return isfinite(v) && v > 0.0f; }
 
-// Simple sitting/standing heuristic based on distance alone.
+// Sitting/standing heuristic with hysteresis to prevent flicker.
+// Uses prevP to hold the current pose inside the dead zone (50–60 cm).
 // Returns UNKNOWN if there's no target or the distance is invalid.
 static PoseGuess guessPose(PersonState s, float dist_cm) {
   if (s == PersonState::NO_TARGET || isnan(dist_cm) || dist_cm <= 0.0f) return PoseGuess::UNKNOWN;
-  return (dist_cm < SIT_STAND_THRESHOLD_CM) ? PoseGuess::SITTING : PoseGuess::STANDING;
+  if (dist_cm >= SIT_STAND_UPPER_CM) return PoseGuess::STANDING;
+  if (dist_cm < SIT_STAND_LOWER_CM) return PoseGuess::SITTING;
+  // Inside dead zone: hold previous pose, default to SITTING if unknown
+  return (prevP == PoseGuess::STANDING) ? PoseGuess::STANDING : PoseGuess::SITTING;
 }
 
 // CRC-16/CCITT-FALSE: the checksum algorithm used for packet integrity.
@@ -1042,9 +1065,15 @@ void loop() {
 
   // ── Step 2: Read ambient light sensor ──────────────────────────────────────
   // The BH1750 is read on its own 1-second timer, independent of the radar.
-  // If the sensor failed to initialize at boot, we still emit EVT_LIGHT
-  // with valid=false so the host knows the sensor is absent.
+  // If the sensor failed to initialize (at boot or due to I2C glitch), we
+  // periodically retry begin() every LIGHT_RETRY_MS. On success, normal
+  // readings resume immediately. On failure, EVT_LIGHT with valid=false
+  // continues so the host knows the sensor is absent.
   uint32_t lightNow = millis();
+  if (!lightSensorReady && (lightNow - lastLightRetryMs >= LIGHT_RETRY_MS)) {
+    lastLightRetryMs = lightNow;
+    lightSensorReady = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_I2C_ADDR, &Wire);
+  }
   if (lightNow - lastLightEmitMs >= LIGHT_MS_DEFAULT) {
     lastLightEmitMs = lightNow;
     float lux = NAN;
