@@ -14,6 +14,7 @@ import sys
 import time
 import asyncio
 import logging
+import threading
 from typing import List, Optional
 from pathlib import Path
 
@@ -70,6 +71,7 @@ class LocalStream:
         self._instance_path: Optional[str] = instance_path
         self._settings_initialized = False
         self._asyncio_loop = None
+        self._api_key_event = threading.Event()
 
     # ---- Settings UI (only when API key is missing) ----
     def _read_env_lines(self, env_path: Path) -> list[str]:
@@ -136,6 +138,7 @@ class LocalStream:
             config.OPENAI_API_KEY = k
         except Exception:
             logger.warning("Failed to set config.OPENAI_API_KEY", exc_info=True)
+        self._api_key_event.set()
 
         if not self._instance_path:
             return
@@ -376,10 +379,8 @@ class LocalStream:
         # If key is still missing -> wait until provided via the settings UI
         if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
             logger.warning("OPENAI_API_KEY not found. Open the app settings page to enter it.")
-            # Poll until the key becomes available (set via the settings UI)
             try:
-                while not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
-                    time.sleep(0.2)
+                self._api_key_event.wait()
             except KeyboardInterrupt:
                 logger.info("Interrupted while waiting for API key.")
                 return

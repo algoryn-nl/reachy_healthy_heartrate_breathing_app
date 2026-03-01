@@ -34,7 +34,7 @@
 - [ ] **PY-MED-3**: Defer `last_activity_time` init to `start_up()` in `openai_realtime.py:85`; add lock for concurrent access
 - [x] **PY-MED-4**: Fix float equality comparison for timestamps in `camera_worker.py` — use `abs() < 1e-9` (2026-03-01)
 - [x] **PY-MED-5**: Make `move_queue` private (`_move_queue`) in `moves.py` — public API via `clear_move_queue()` unchanged (2026-03-01)
-- [ ] **PY-MED-6**: Replace API key polling loop with event-based signaling in `console.py:376-385`
+- [x] **PY-MED-6**: Replace API key polling loop with `threading.Event` — `_api_key_event` signaled from `_persist_api_key()`; no more busy-poll (`console.py`) (2026-03-01)
 - [ ] **PY-MED-7**: Decompose `launch()` into smaller methods in `console.py:322-385`
 - [ ] **PY-MED-8**: Add analytics JSONL file rotation or size cap in `light_orchestrator.py`
 - [ ] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()`
