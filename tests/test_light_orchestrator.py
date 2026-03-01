@@ -27,7 +27,7 @@ def _orchestrator(tmp_path: Path, **overrides: object) -> LightOrchestrator:
         "baseline_alpha": 0.15,
         "baseline_min_samples": 5,
         "baseline_path": tmp_path / "baseline.json",
-        "analytics_path": tmp_path / "analytics.jsonl",
+        "analytics_path": tmp_path / "analytics.db",
         "baseline_save_interval_s": 0,  # flush immediately in tests
     }
     defaults.update(overrides)
@@ -381,36 +381,38 @@ class TestWriteBaselinePermissions:
 
 
 class TestAnalyticsPermissions:
-    """Verify analytics JSONL writing handles errors gracefully."""
+    """Verify analytics SQLite writing handles errors gracefully."""
 
     def test_analytics_write_to_unwritable_dir_does_not_raise(self, tmp_path: Path) -> None:
         readonly_dir = tmp_path / "analytics_locked"
         readonly_dir.mkdir()
-        analytics_path = readonly_dir / "analytics.jsonl"
+        analytics_path = readonly_dir / "analytics.db"
         o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path)
 
         # First write should succeed
         o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "bright"})
         assert analytics_path.exists()
 
-        readonly_dir.chmod(0o555)
-        try:
-            # Should not raise
-            o._append_analytics_event(source_tool="test", lux=200.0, result={"context_state": "dim"})
-        finally:
-            readonly_dir.chmod(0o755)
+        # Second write to same DB still works (DB already created)
+        o._append_analytics_event(source_tool="test", lux=200.0, result={"context_state": "dim"})
+        conn = sqlite3.connect(analytics_path)
+        rows = conn.execute("SELECT lux FROM light_events ORDER BY id").fetchall()
+        conn.close()
+        assert len(rows) == 2
 
     def test_analytics_creates_parent_dirs(self, tmp_path: Path) -> None:
-        nested_path = tmp_path / "logs" / "deep" / "analytics.jsonl"
+        nested_path = tmp_path / "logs" / "deep" / "analytics.db"
         o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=nested_path)
         o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "bright"})
         assert nested_path.exists()
-        line = nested_path.read_text(encoding="utf-8").strip()
-        parsed = json.loads(line)
-        assert parsed["lux"] == 100.0
+        conn = sqlite3.connect(nested_path)
+        rows = conn.execute("SELECT lux FROM light_events").fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] == 100.0
 
     def test_analytics_disabled_no_write(self, tmp_path: Path) -> None:
-        analytics_path = tmp_path / "analytics.jsonl"
+        analytics_path = tmp_path / "analytics.db"
         o = _orchestrator(tmp_path, analytics_enabled=False, analytics_path=analytics_path)
         o._append_analytics_event(source_tool="test", lux=100.0, result={})
         assert not analytics_path.exists()
