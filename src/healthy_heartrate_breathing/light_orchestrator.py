@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import sqlite3
 import time
 import logging
 from typing import Any, Callable, Awaitable
@@ -39,7 +40,7 @@ class LightOrchestrator:
         analytics_path: Path | None = None,
         baseline_save_interval_s: float = 60.0,
         baseline_max_age_days: int = 90,
-        analytics_max_bytes: int = 5_000_000,
+        analytics_max_age_days: int = 90,
     ) -> None:
         self.enabled = enabled
         self.analytics_enabled = analytics_enabled
@@ -56,7 +57,9 @@ class LightOrchestrator:
         self.analytics_path = analytics_path
         self.baseline_save_interval_s = baseline_save_interval_s
         self.baseline_max_age_days = baseline_max_age_days
-        self.analytics_max_bytes = analytics_max_bytes
+        self.analytics_max_age_days = analytics_max_age_days
+        self._analytics_db_initialized: bool = False
+        self._analytics_insert_count: int = 0
 
         # Mutable state
         self._baseline_state: dict[str, Any] = {"schema_version": 1, "users": {}}
@@ -246,46 +249,108 @@ class LightOrchestrator:
 
     # ---- Analytics ----
 
-    def _maybe_rotate_analytics(self) -> None:
-        """Rotate analytics JSONL when file exceeds analytics_max_bytes."""
-        if self.analytics_path is None or not self.analytics_path.exists():
+    def _init_analytics_db(self) -> None:
+        """Create analytics SQLite schema and enable WAL mode (idempotent)."""
+        if self._analytics_db_initialized or self.analytics_path is None:
             return
-        try:
-            if self.analytics_path.stat().st_size <= self.analytics_max_bytes:
-                return
-        except OSError:
-            return
-        backup = self.analytics_path.parent / (self.analytics_path.name + ".1")
-        try:
-            self.analytics_path.replace(backup)
-        except OSError as e:
-            logger.warning("Failed rotating analytics %s: %s", self.analytics_path, e)
-
-    def _append_analytics_event(self, *, source_tool: str, lux: float | None, result: dict[str, Any]) -> None:
-        """Append one light-context analytics row as JSONL."""
-        if not self.analytics_enabled or self.analytics_path is None:
-            return
-        payload = {
-            "event": "light_context_decision",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user_id": self.user_id,
-            "source_tool": source_tool,
-            "context_state": result.get("context_state"),
-            "recommended_mode": result.get("recommended_mode"),
-            "recommended_actions": result.get("recommended_actions"),
-            "confidence": result.get("confidence"),
-            "cooldown_hint_s": result.get("cooldown_hint_s"),
-            "reason_codes": result.get("reason_codes"),
-            "lux": lux,
-            "observations": result.get("observations"),
-        }
         try:
             self.analytics_path.parent.mkdir(parents=True, exist_ok=True)
-            self._maybe_rotate_analytics()
-            with self.analytics_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+            conn = sqlite3.connect(self.analytics_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS light_events (
+                    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp                  TEXT    NOT NULL,
+                    user_id                    TEXT    NOT NULL,
+                    source_tool                TEXT    NOT NULL,
+                    context_state              TEXT,
+                    recommended_mode           TEXT,
+                    recommended_actions        TEXT,
+                    confidence                 REAL,
+                    cooldown_hint_s            REAL,
+                    reason_codes               TEXT,
+                    lux                        REAL,
+                    obs_lux_delta_60s          REAL,
+                    obs_local_hour             INTEGER,
+                    obs_is_night               INTEGER,
+                    obs_presence_detected      INTEGER,
+                    obs_active_interaction     INTEGER,
+                    obs_low_light_duration_min REAL,
+                    obs_prefers_dim            INTEGER,
+                    obs_light_sensitive        INTEGER,
+                    obs_allow_wellness_nudges  INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_light_events_timestamp ON light_events(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_light_events_user_id ON light_events(user_id);
+            """)
+            conn.close()
+            self._analytics_db_initialized = True
+            self._prune_analytics()
         except Exception as e:
-            logger.warning("Failed writing light analytics event to %s: %s", self.analytics_path, e)
+            logger.warning("Failed initializing analytics DB at %s: %s", self.analytics_path, e)
+
+    def _prune_analytics(self) -> None:
+        """Delete analytics rows older than analytics_max_age_days."""
+        if self.analytics_path is None or not self.analytics_path.exists():
+            return
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.analytics_max_age_days)).isoformat()
+        try:
+            conn = sqlite3.connect(self.analytics_path)
+            conn.execute("DELETE FROM light_events WHERE timestamp < ?", (cutoff,))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning("Failed pruning analytics at %s: %s", self.analytics_path, e)
+
+    def _append_analytics_event(self, *, source_tool: str, lux: float | None, result: dict[str, Any]) -> None:
+        """Insert one light-context analytics row into SQLite."""
+        if not self.analytics_enabled or self.analytics_path is None:
+            return
+        self._init_analytics_db()
+        obs = result.get("observations")
+        if not isinstance(obs, dict):
+            obs = {}
+        actions = result.get("recommended_actions")
+        reasons = result.get("reason_codes")
+        try:
+            conn = sqlite3.connect(self.analytics_path)
+            conn.execute(
+                """INSERT INTO light_events (
+                    timestamp, user_id, source_tool, context_state, recommended_mode,
+                    recommended_actions, confidence, cooldown_hint_s, reason_codes, lux,
+                    obs_lux_delta_60s, obs_local_hour, obs_is_night, obs_presence_detected,
+                    obs_active_interaction, obs_low_light_duration_min, obs_prefers_dim,
+                    obs_light_sensitive, obs_allow_wellness_nudges
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    self.user_id,
+                    source_tool,
+                    result.get("context_state"),
+                    result.get("recommended_mode"),
+                    ",".join(actions) if isinstance(actions, list) else None,
+                    result.get("confidence"),
+                    result.get("cooldown_hint_s"),
+                    ",".join(reasons) if isinstance(reasons, list) else None,
+                    lux,
+                    obs.get("lux_delta_60s"),
+                    obs.get("local_hour"),
+                    int(obs["is_night"]) if "is_night" in obs else None,
+                    int(obs["presence_detected"]) if "presence_detected" in obs else None,
+                    int(obs["active_interaction"]) if "active_interaction" in obs else None,
+                    obs.get("low_light_duration_min"),
+                    int(obs["prefers_dim"]) if "prefers_dim" in obs else None,
+                    int(obs["light_sensitive"]) if "light_sensitive" in obs else None,
+                    int(obs["allow_wellness_nudges"]) if "allow_wellness_nudges" in obs else None,
+                ),
+            )
+            conn.commit()
+            conn.close()
+            self._analytics_insert_count += 1
+            if self._analytics_insert_count % 100 == 0:
+                self._prune_analytics()
+        except Exception as e:
+            logger.warning("Failed writing analytics event to %s: %s", self.analytics_path, e)
 
     # ---- Core orchestration ----
 
