@@ -267,7 +267,7 @@ static const float SIT_STAND_LOWER_CM = 50.0f;  // must drop below to transition
 
 // --- Telemetry emission throttles (milliseconds) ---
 // These set the minimum interval between consecutive events of each type.
-// The host can override BIO_MS and TARGETS_MS via commands (minimum 50 ms).
+// The host can override host.bioMs and host.targetsMs via commands (minimum 50 ms).
 static const uint32_t TARGETS_MS_DEFAULT = 250;   // radar target list
 static const uint32_t BIO_MS_DEFAULT     = 1000;  // heart/breath rate
 static const uint32_t LIGHT_MS_DEFAULT   = 1000;  // ambient light
@@ -280,67 +280,80 @@ static const uint32_t LIGHT_RETRY_MS = 10000;        // retry BH1750 init every 
 // Global state
 // ============================================================================
 // All mutable state lives here. The firmware is single-threaded (Arduino
-// superloop), so no locking is needed. Variables are grouped by function.
+// superloop), so no locking is needed. Variables are grouped into structs
+// by function for readability (FW-MED-2).
 
-// --- Timing ---
+// --- Protocol-level singletons (not part of any logical group) ---
 static uint32_t t0 = 0;       // millis() at boot — all event timestamps are relative to this
 static uint16_t txSeq = 0;    // monotonically increasing sequence number for outgoing packets
 
-// --- Sensor value caching ---
-// The radar doesn't always return fresh readings every cycle. When a reading
-// is missing, we fall back to the last known good value — but only within
-// an expiry window to avoid reporting stale data.
-static float lastDist = NAN;  // last good distance (cm) — no expiry (distance is stable)
-static float lastBR = NAN;    // last good breathing rate (bpm) — expires after VITALS_CACHE_EXPIRY_MS
-static float lastHR = NAN;    // last good heart rate (bpm) — expires after VITALS_CACHE_EXPIRY_MS
-static uint32_t lastBRUpdateMs = 0;  // timestamp of last fresh BR reading
-static uint32_t lastHRUpdateMs = 0;  // timestamp of last fresh HR reading
+// --- Constants that don't belong to a struct ---
 static const uint32_t VITALS_CACHE_EXPIRY_MS = 2000;  // max age (ms) before cached vitals are invalidated
-static const uint32_t STATE_MIN_INTERVAL_MS = 200;    // minimum ms between change-triggered EVT_STATE
+static const uint32_t STATE_MIN_INTERVAL_MS = 200;     // minimum ms between change-triggered EVT_STATE
+static const uint32_t DIAG_MS = 10000;                 // diagnostic emission interval (10 s)
 
-// --- Presence tracking ---
-static uint32_t lastPresenceMs = 0;    // last millis() when any presence signal was detected
-static uint8_t absentStreak = 0;       // consecutive frames with no presence signal
-static uint8_t vitalsStreak = 0;       // consecutive frames with valid vitals (both HR and BR)
-static uint8_t humanStableStreak = 0;  // consecutive frames with human detected + head still
-static uint32_t lastSingleTargetMs = 0;  // last millis() when exactly 1 target was seen
-static bool seenSingleTarget = false;    // true once we've seen at least one single-target frame
+// Cached sensor values. The radar doesn't always return fresh readings every
+// cycle; we fall back to the last known good value within an expiry window.
+struct VitalsCache {
+  float dist   = NAN;   // last good distance (cm) — no expiry (distance is stable)
+  float br     = NAN;   // last good breathing rate (bpm) — expires after VITALS_CACHE_EXPIRY_MS
+  float hr     = NAN;   // last good heart rate (bpm) — expires after VITALS_CACHE_EXPIRY_MS
+  uint32_t brUpdateMs = 0;  // timestamp of last fresh BR reading
+  uint32_t hrUpdateMs = 0;  // timestamp of last fresh HR reading
+};
+static VitalsCache vitals;
 
-// --- Emission throttle timestamps ---
-// Each telemetry type has its own emission interval. These track when the
-// last packet of each type was sent to enforce the throttle.
-static uint32_t lastTargetsEmitMs = 0;
-static uint32_t lastBioEmitMs = 0;
-static uint32_t lastStateEmitMs = 0;
-static uint32_t lastLightEmitMs = 0;
+// Presence detection streaks and timing.
+struct PresenceState {
+  uint32_t lastMs           = 0;      // last millis() when any presence signal was detected
+  uint8_t  absentStreak     = 0;      // consecutive frames with no presence signal
+  uint8_t  vitalsStreak     = 0;      // consecutive frames with valid vitals (both HR and BR)
+  uint8_t  humanStableStreak = 0;     // consecutive frames with human detected + head still
+  uint32_t lastSingleTargetMs = 0;    // last millis() when exactly 1 target was seen
+  bool     seenSingleTarget = false;  // true once we've seen at least one single-target frame
+};
+static PresenceState presence;
 
-// --- Diagnostic counters ---
+// Timestamps of the last emitted packet per telemetry type. Used to enforce
+// per-type throttle intervals.
+struct EmitTimers {
+  uint32_t targets    = 0;
+  uint32_t bio        = 0;
+  uint32_t state      = 0;
+  uint32_t light      = 0;
+  uint32_t diag       = 0;
+  uint32_t lightRetry = 0;  // last BH1750 re-init attempt
+};
+static EmitTimers emitTimers;
+
 // Cumulative health metrics emitted periodically via EVT_DIAG so the host
-// can detect firmware-side failures (FW-HIGH-1, FW-HIGH-2).
-static uint32_t mmwaveFailCount = 0;        // total mmWave.update() failures since boot
-static uint16_t mmwaveConsecutiveFails = 0;  // current consecutive failure streak
-static uint16_t txDropCount = 0;             // total COBS/overflow packet drops since boot
-static uint32_t lastDiagEmitMs = 0;
-static const uint32_t DIAG_MS = 10000;       // diagnostic emission interval (10 s)
+// can detect firmware-side failures.
+struct DiagCounters {
+  uint32_t mmwaveFails       = 0;  // total mmWave.update() failures since boot
+  uint16_t mmwaveConsecFails = 0;  // current consecutive failure streak
+  uint16_t txDrops           = 0;  // total COBS/overflow packet drops since boot
+};
+static DiagCounters diag;
 
-// --- Host-controlled settings ---
-// These are modified by host commands (CMD_SET_HM, CMD_SET_FOCUS, etc.)
-static bool hostHeadMoving = false;     // true when the robot head is in motion (suppresses vitals)
-static bool lightSensorReady = false;   // true when BH1750 is initialized; retried periodically if false
-static uint32_t lastLightRetryMs = 0;  // last millis() when BH1750 re-init was attempted
-static int forcedFocusCluster = -1;     // host-requested cluster index (-1 = auto-select closest)
+// Settings controlled by host commands (CMD_SET_HM, CMD_SET_FOCUS, etc.)
+struct HostSettings {
+  bool     headMoving    = false;               // robot head is in motion (suppresses vitals)
+  bool     lightReady    = false;               // BH1750 initialized; retried periodically if false
+  int      focusCluster  = -1;                  // host-requested cluster index (-1 = auto-select)
+  uint32_t targetsMs     = TARGETS_MS_DEFAULT;  // configurable EVT_TARGETS interval
+  uint32_t bioMs         = BIO_MS_DEFAULT;      // configurable EVT_BIO interval
+};
+static HostSettings host;
 
-// --- Configurable emission intervals (host can change via CMD_SET_BIO_MS / CMD_SET_TARGETS_MS) ---
-static uint32_t TARGETS_MS = TARGETS_MS_DEFAULT;
-static uint32_t BIO_MS = BIO_MS_DEFAULT;
-
-// --- Previous-state tracking for change detection ---
-// EVT_STATE is emitted on state change OR every 1 second. These track the
-// previous values so we can detect changes.
-static PersonState prevS = PersonState::NO_TARGET;
-static PoseGuess prevP = PoseGuess::UNKNOWN;
-static bool prevHM = false;  // previous head-moving flag
-static int prevN = -1;       // previous target count
+// Previous-state tracking for EVT_STATE change detection.
+// EVT_STATE is emitted on state change OR every 1 second.
+struct PrevState {
+  PersonState s  = PersonState::NO_TARGET;
+  PoseGuess   p  = PoseGuess::UNKNOWN;
+  bool        hm = false;  // head-moving flag
+  int         n  = -1;     // target count
+};
+static PrevState prev;
 
 // --- Serial protocol buffers ---
 // COBS encoding expands data by at most 1 byte per 254, plus a delimiter.
@@ -377,14 +390,14 @@ static_assert(
 static bool isFinitePositive(float v) { return isfinite(v) && v > 0.0f; }
 
 // Sitting/standing heuristic with hysteresis to prevent flicker.
-// Uses prevP to hold the current pose inside the dead zone (50–60 cm).
+// Uses prev.p to hold the current pose inside the dead zone (50–60 cm).
 // Returns UNKNOWN if there's no target or the distance is invalid.
 static PoseGuess guessPose(PersonState s, float dist_cm) {
   if (s == PersonState::NO_TARGET || isnan(dist_cm) || dist_cm <= 0.0f) return PoseGuess::UNKNOWN;
   if (dist_cm >= SIT_STAND_UPPER_CM) return PoseGuess::STANDING;
   if (dist_cm < SIT_STAND_LOWER_CM) return PoseGuess::SITTING;
   // Inside dead zone: hold previous pose, default to SITTING if unknown
-  return (prevP == PoseGuess::STANDING) ? PoseGuess::STANDING : PoseGuess::SITTING;
+  return (prev.p == PoseGuess::STANDING) ? PoseGuess::STANDING : PoseGuess::SITTING;
 }
 
 // CRC-16/CCITT-FALSE: the checksum algorithm used for packet integrity.
@@ -568,10 +581,10 @@ static uint16_t toU16ScaledOrNull(float value, float scale) {
 //   [version:u8] [msgType:u8] [seq:u16] [payloadLen:u16] [payload...] [crc:u16]
 //
 // Drops the packet if payload exceeds buffer capacity or COBS encoding
-// overflows, incrementing txDropCount so the host can detect lost frames
+// overflows, incrementing diag.txDrops so the host can detect lost frames
 // via EVT_DIAG.
 static void sendFrame(uint8_t msgType, const uint8_t* payload, size_t payloadLen) {
-  if (payloadLen > sizeof(txPayloadBuf)) { txDropCount++; return; }
+  if (payloadLen > sizeof(txPayloadBuf)) { diag.txDrops++; return; }
 
   size_t pktLen = 0;
   appendU8(txPacketBuf, &pktLen, PROTO_VERSION);
@@ -588,7 +601,7 @@ static void sendFrame(uint8_t msgType, const uint8_t* payload, size_t payloadLen
   appendU16LE(txPacketBuf, &pktLen, crc);
 
   size_t encodedLen = cobsEncode(txPacketBuf, pktLen, txEncodedBuf, sizeof(txEncodedBuf));
-  if (encodedLen == 0) { txDropCount++; return; }
+  if (encodedLen == 0) { diag.txDrops++; return; }
 
   Serial.write(txEncodedBuf, encodedLen);
   Serial.write((uint8_t)0x00);
@@ -603,7 +616,7 @@ static void sendFrame(uint8_t msgType, const uint8_t* payload, size_t payloadLen
 // EVT_ACK: confirm a host command was processed.
 //   cmdId      — which command this acknowledges
 //   statusCode — ACK_OK, ACK_CLAMPED, or ACK_IGNORED
-//   value      — the applied value (e.g. the new BIO_MS interval)
+//   value      — the applied value (e.g. the new host.bioMs interval)
 static void emitAck(uint8_t cmdId, uint8_t statusCode, int32_t value) {
   size_t n = 0;
   appendU8(txPayloadBuf, &n, cmdId);
@@ -633,7 +646,7 @@ static void emitPong(uint32_t t_ms) {
 // and discover which sensors are present.
 static void emitHello() {
   uint16_t features = 0;
-  if (lightSensorReady) features |= FEAT_LIGHT_SENSOR;
+  if (host.lightReady) features |= FEAT_LIGHT_SENSOR;
   size_t n = 0;
   appendU8(txPayloadBuf, &n, PROTO_VERSION);
   appendU16LE(txPayloadBuf, &n, features);
@@ -715,7 +728,7 @@ static void emitDiag(uint32_t t_ms, uint32_t mmwFails, uint16_t mmwConsecFails, 
 }
 
 // EVT_TARGETS: the list of radar targets (people/objects) currently detected,
-// plus the selected focus target's detailed position. Sent at TARGETS_MS interval
+// plus the selected focus target's detailed position. Sent at host.targetsMs interval
 // (default 250 ms, configurable via CMD_SET_TARGETS_MS).
 //
 // Wire layout:
@@ -735,7 +748,7 @@ static void emitTargets(uint32_t t_ms, const PeopleCounting& info, const FocusTa
 
   size_t n = 0;
   appendU32LE(txPayloadBuf, &n, t_ms);
-  appendI16LE(txPayloadBuf, &n, (int16_t)forcedFocusCluster);
+  appendI16LE(txPayloadBuf, &n, (int16_t)host.focusCluster);
 
   int16_t focusCluster = -1;
   int16_t focusXmm = 0;
@@ -880,8 +893,8 @@ static void applyBinaryCommand(uint8_t msgType, const uint8_t* payload, size_t p
       emitErr(msgType, ERR_BAD_VALUE);
       return;
     }
-    hostHeadMoving = (hm == 1);
-    emitAck(msgType, ACK_OK, hostHeadMoving ? 1 : 0);
+    host.headMoving = (hm == 1);
+    emitAck(msgType, ACK_OK, host.headMoving ? 1 : 0);
     return;
   }
 
@@ -893,8 +906,8 @@ static void applyBinaryCommand(uint8_t msgType, const uint8_t* payload, size_t p
       emitErr(msgType, ERR_BAD_LEN);
       return;
     }
-    forcedFocusCluster = (int)readI16LE(payload);
-    emitAck(msgType, ACK_OK, (int32_t)forcedFocusCluster);
+    host.focusCluster = (int)readI16LE(payload);
+    emitAck(msgType, ACK_OK, (int32_t)host.focusCluster);
     return;
   }
 
@@ -909,8 +922,8 @@ static void applyBinaryCommand(uint8_t msgType, const uint8_t* payload, size_t p
     uint16_t req = readU16LE(payload);
     uint16_t applied = (req < 50) ? 50 : req;
     uint8_t status = (applied == req) ? ACK_OK : ACK_CLAMPED;
-    BIO_MS = applied;
-    emitAck(msgType, status, (int32_t)BIO_MS);
+    host.bioMs = applied;
+    emitAck(msgType, status, (int32_t)host.bioMs);
     return;
   }
 
@@ -923,8 +936,8 @@ static void applyBinaryCommand(uint8_t msgType, const uint8_t* payload, size_t p
     uint16_t req = readU16LE(payload);
     uint16_t applied = (req < 50) ? 50 : req;
     uint8_t status = (applied == req) ? ACK_OK : ACK_CLAMPED;
-    TARGETS_MS = applied;
-    emitAck(msgType, status, (int32_t)TARGETS_MS);
+    host.targetsMs = applied;
+    emitAck(msgType, status, (int32_t)host.targetsMs);
     return;
   }
 
@@ -1038,7 +1051,7 @@ void setup() {
   delay(200);            // let USB enumerate before sending data
 
   Wire.begin();          // I2C bus for BH1750 light sensor
-  lightSensorReady = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_I2C_ADDR, &Wire);
+  host.lightReady = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_I2C_ADDR, &Wire);
 
   mmWave.begin(&mmWaveSerial);  // start mmWave radar on hardware UART
 
@@ -1070,15 +1083,15 @@ void loop() {
   // readings resume immediately. On failure, EVT_LIGHT with valid=false
   // continues so the host knows the sensor is absent.
   uint32_t lightNow = millis();
-  if (!lightSensorReady && (lightNow - lastLightRetryMs >= LIGHT_RETRY_MS)) {
-    lastLightRetryMs = lightNow;
-    lightSensorReady = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_I2C_ADDR, &Wire);
+  if (!host.lightReady && (lightNow - emitTimers.lightRetry >= LIGHT_RETRY_MS)) {
+    emitTimers.lightRetry = lightNow;
+    host.lightReady = lightSensor.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, BH1750_I2C_ADDR, &Wire);
   }
-  if (lightNow - lastLightEmitMs >= LIGHT_MS_DEFAULT) {
-    lastLightEmitMs = lightNow;
+  if (lightNow - emitTimers.light >= LIGHT_MS_DEFAULT) {
+    emitTimers.light = lightNow;
     float lux = NAN;
     bool lightValid = false;
-    if (lightSensorReady) {
+    if (host.lightReady) {
       lux = lightSensor.readLightLevel();
       lightValid = isfinite(lux) && lux >= 0.0f;
     }
@@ -1090,9 +1103,9 @@ void loop() {
   // Runs before mmWave.update() so it fires even during sensor failure streaks.
   {
     uint32_t diagNow = millis();
-    if (diagNow - lastDiagEmitMs >= DIAG_MS) {
-      lastDiagEmitMs = diagNow;
-      emitDiag(diagNow - t0, mmwaveFailCount, mmwaveConsecutiveFails, txDropCount);
+    if (diagNow - emitTimers.diag >= DIAG_MS) {
+      emitTimers.diag = diagNow;
+      emitDiag(diagNow - t0, diag.mmwaveFails, diag.mmwaveConsecFails, diag.txDrops);
     }
   }
 
@@ -1101,15 +1114,15 @@ void loop() {
   // data frame has been received and parsed. If false, skip the rest —
   // the previous state remains valid and we'll try again next iteration.
   if (!mmWave.update(100)) {
-    mmwaveFailCount++;
-    mmwaveConsecutiveFails++;
+    diag.mmwaveFails++;
+    diag.mmwaveConsecFails++;
     return;
   }
-  mmwaveConsecutiveFails = 0;  // reset streak on success
+  diag.mmwaveConsecFails = 0;  // reset streak on success
 
   // Snapshot the host-controlled head-moving flag (may change mid-cycle
   // via pollHostUsbSerial, but we use a consistent value for this frame).
-  bool headMoving = hostHeadMoving;
+  bool headMoving = host.headMoving;
 
   // ── 3a: Read presence and target data ──────────────────────────────────────
   bool human = mmWave.isHumanDetected();  // binary: radar thinks a human is present
@@ -1123,8 +1136,8 @@ void loop() {
   // fall back to the closest target if the locked cluster isn't visible.
   FocusTarget focus;
   if (haveTargets && nTargets > 0) {
-    if (forcedFocusCluster >= 0) {
-      focus = pickForcedCluster(info, forcedFocusCluster);
+    if (host.focusCluster >= 0) {
+      focus = pickForcedCluster(info, host.focusCluster);
       if (!focus.valid) focus = pickClosestTarget(info);
     } else {
       focus = pickClosestTarget(info);
@@ -1146,9 +1159,9 @@ void loop() {
   // Distance is relatively stable so there's no expiry — a person doesn't
   // teleport between frames.
   if (dist_ok && isfinite(dist_cm)) {
-    lastDist = dist_cm;
+    vitals.dist = dist_cm;
   } else {
-    dist_cm = lastDist;
+    dist_cm = vitals.dist;
   }
   // After fallback, dist_ok must reflect whether we actually have a usable
   // distance (not just whether this specific read succeeded).
@@ -1157,23 +1170,23 @@ void loop() {
   // Breathing rate fallback: use cached value if fresh, expire after 2 seconds.
   // Vitals change faster than distance, so stale values are dangerous.
   if (br_ok && isfinite(br)) {
-    lastBR = br;
-    lastBRUpdateMs = now;
-  } else if ((now - lastBRUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
-    br = lastBR;  // still fresh enough — use cached value
+    vitals.br = br;
+    vitals.brUpdateMs = now;
+  } else if ((now - vitals.brUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
+    br = vitals.br;  // still fresh enough — use cached value
   } else {
-    lastBR = NAN;  // expired — clear cache
+    vitals.br = NAN;  // expired — clear cache
     br = NAN;
   }
 
   // Heart rate fallback: same expiry logic as breathing rate.
   if (hr_ok && isfinite(hr)) {
-    lastHR = hr;
-    lastHRUpdateMs = now;
-  } else if ((now - lastHRUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
-    hr = lastHR;
+    vitals.hr = hr;
+    vitals.hrUpdateMs = now;
+  } else if ((now - vitals.hrUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
+    hr = vitals.hr;
   } else {
-    lastHR = NAN;
+    vitals.hr = NAN;
     hr = NAN;
   }
 
@@ -1184,14 +1197,14 @@ void loop() {
                      (hr_ok && isFinitePositive(hr));
 
   if (present_now) {
-    lastPresenceMs = now;
-    absentStreak = 0;
+    presence.lastMs = now;
+    presence.absentStreak = 0;
   } else {
-    absentStreak++;
+    presence.absentStreak++;
   }
   // Don't transition to NO_TARGET until both a time window AND a frame count
   // have elapsed — this prevents flickering on momentary radar dropouts.
-  bool presence_recent = (now - lastPresenceMs) < ABSENT_HOLD_MS;
+  bool presence_recent = (now - presence.lastMs) < ABSENT_HOLD_MS;
 
   // ── 3d: Movement detection ─────────────────────────────────────────────────
   // Two sources of movement: the focus target's Doppler velocity (person moving)
@@ -1219,21 +1232,21 @@ void loop() {
   // resetting the hysteresis counter.
   bool singleTarget = (nTargets == 1);
   if (singleTarget) {
-    seenSingleTarget = true;
-    lastSingleTargetMs = now;
+    presence.seenSingleTarget = true;
+    presence.lastSingleTargetMs = now;
   }
 
   // Track consecutive frames with a stable human signal (for fallback lock).
   if (human && !headMoving) {
-    humanStableStreak = (humanStableStreak < 255) ? (uint8_t)(humanStableStreak + 1) : (uint8_t)255;
+    presence.humanStableStreak = (presence.humanStableStreak < 255) ? (uint8_t)(presence.humanStableStreak + 1) : (uint8_t)255;
   } else {
-    humanStableStreak = 0;
+    presence.humanStableStreak = 0;
   }
 
   // Fallback lock: allow vitals to continue briefly when target tracking drops.
-  bool singleTargetRecent = seenSingleTarget && ((now - lastSingleTargetMs) <= TARGET_LOSS_GRACE_MS);
+  bool singleTargetRecent = presence.seenSingleTarget && ((now - presence.lastSingleTargetMs) <= TARGET_LOSS_GRACE_MS);
   bool fallbackTargetLock = (!singleTarget) && (nTargets == 0) && singleTargetRecent &&
-                            (humanStableStreak >= HUMAN_STABLE_FALLBACK_CONFIRM);
+                            (presence.humanStableStreak >= HUMAN_STABLE_FALLBACK_CONFIRM);
 
   // Guard rail check: reject physiologically impossible values.
   bool br_valid = br_ok && isfinite(br) && (br >= BR_MIN) && (br <= BR_MAX);
@@ -1245,21 +1258,21 @@ void loop() {
   //   streak  → valid for VITALS_CONFIRM consecutive frames (hysteresis)
   bool vitals_allowed = !headMoving && (singleTarget || fallbackTargetLock);
   bool vitals_valid = vitals_allowed && br_valid && hr_valid;
-  vitalsStreak = vitals_valid ? (vitalsStreak < 255 ? (uint8_t)(vitalsStreak + 1) : (uint8_t)255) : 0;
+  presence.vitalsStreak = vitals_valid ? (presence.vitalsStreak < 255 ? (uint8_t)(presence.vitalsStreak + 1) : (uint8_t)255) : 0;
 
   // ── 3g: State machine decision ─────────────────────────────────────────────
   // Priority order matters: NO_TARGET > MULTI_TARGET > MOVING > RESTING_VITALS > STILL_NEAR > PRESENT_FAR
   PersonState s;
-  if (!presence_recent && absentStreak >= ABSENT_CONFIRM) {
+  if (!presence_recent && presence.absentStreak >= ABSENT_CONFIRM) {
     s = PersonState::NO_TARGET;
-    vitalsStreak = 0;    // reset hysteresis — next person starts fresh
+    presence.vitalsStreak = 0;    // reset hysteresis — next person starts fresh
   } else if (nTargets > 1) {
     s = PersonState::MULTI_TARGET;
-    vitalsStreak = 0;    // can't isolate vitals with multiple people
+    presence.vitalsStreak = 0;    // can't isolate vitals with multiple people
   } else if (moving) {
     s = PersonState::MOVING;
-    vitalsStreak = 0;    // motion corrupts vitals signal
-  } else if (near && vitalsStreak >= VITALS_CONFIRM) {
+    presence.vitalsStreak = 0;    // motion corrupts vitals signal
+  } else if (near && presence.vitalsStreak >= VITALS_CONFIRM) {
     s = PersonState::RESTING_VITALS;  // stable vitals confirmed!
   } else if (near) {
     s = PersonState::STILL_NEAR;      // warming up — vitals not yet confirmed
@@ -1272,36 +1285,36 @@ void loop() {
 
   // ── 3h: Emit telemetry events ──────────────────────────────────────────────
 
-  // EVT_TARGETS: radar target list (throttled by TARGETS_MS).
+  // EVT_TARGETS: radar target list (throttled by host.targetsMs).
   // Only sent when there are actual targets to report.
-  if (haveTargets && nTargets > 0 && (now - lastTargetsEmitMs >= TARGETS_MS)) {
-    lastTargetsEmitMs = now;
+  if (haveTargets && nTargets > 0 && (now - emitTimers.targets >= host.targetsMs)) {
+    emitTimers.targets = now;
     emitTargets(t_ms, info, focus);
   }
 
   // EVT_STATE: on state change (rate-limited to STATE_MIN_INTERVAL_MS) or
   // at least every 1 second as a heartbeat. The rate limit caps change-triggered
   // emissions to max 5/second to prevent host flooding on rapid oscillation.
-  bool stateChanged = (s != prevS) || (p != prevP) || (headMoving != prevHM) || (nTargets != prevN);
-  bool intervalOk = (now - lastStateEmitMs >= STATE_MIN_INTERVAL_MS);
-  if ((stateChanged && intervalOk) || (now - lastStateEmitMs > 1000)) {
-    lastStateEmitMs = now;
+  bool stateChanged = (s != prev.s) || (p != prev.p) || (headMoving != prev.hm) || (nTargets != prev.n);
+  bool intervalOk = (now - emitTimers.state >= STATE_MIN_INTERVAL_MS);
+  if ((stateChanged && intervalOk) || (now - emitTimers.state > 1000)) {
+    emitTimers.state = now;
     emitState(t_ms, s, p, headMoving, human, nTargets, dist_cm, dist_ok);
-    prevS = s;
-    prevP = p;
-    prevHM = headMoving;
-    prevN = nTargets;
+    prev.s = s;
+    prev.p = p;
+    prev.hm = headMoving;
+    prev.n = nTargets;
   }
 
-  // EVT_BIO: vitals telemetry (throttled by BIO_MS).
+  // EVT_BIO: vitals telemetry (throttled by host.bioMs).
   // Always emitted on schedule, even when vitals are unavailable — the
   // allowed/valid/br_ok/hr_ok flags tell the host why data is missing.
-  if (now - lastBioEmitMs >= BIO_MS) {
-    lastBioEmitMs = now;
+  if (now - emitTimers.bio >= host.bioMs) {
+    emitTimers.bio = now;
     // Require hysteresis confirmation before marking individual vitals as OK.
     // This prevents emitting a single lucky reading as trustworthy.
-    bool br_emit_ok = vitals_allowed && br_valid && (vitalsStreak >= VITALS_CONFIRM);
-    bool hr_emit_ok = vitals_allowed && hr_valid && (vitalsStreak >= VITALS_CONFIRM);
+    bool br_emit_ok = vitals_allowed && br_valid && (presence.vitalsStreak >= VITALS_CONFIRM);
+    bool hr_emit_ok = vitals_allowed && hr_valid && (presence.vitalsStreak >= VITALS_CONFIRM);
     emitBio(t_ms, vitals_allowed, vitals_valid, br, br_emit_ok, hr, hr_emit_ok);
   }
 }

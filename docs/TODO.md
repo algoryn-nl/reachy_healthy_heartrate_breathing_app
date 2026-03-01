@@ -40,7 +40,7 @@
 - [ ] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()`
 - [ ] **PY-MED-10**: Standardize tool error handling — error dicts for tools, exceptions for libraries, no `sys.exit()` outside `main()`
 - [x] **FW-MED-1**: Add BH1750 periodic re-init on failure — retry `begin()` every 10s when `!lightSensorReady` (`reachy-sensor.ino`) (2026-03-01)
-- [ ] **FW-MED-2**: Encapsulate firmware globals into structs (presence, vitals, timing groups)
+- [x] **FW-MED-2**: Encapsulate firmware globals into 6 structs — `VitalsCache`, `PresenceState`, `EmitTimers`, `DiagCounters`, `HostSettings`, `PrevState` (`reachy-sensor.ino`) (2026-03-01)
 - [x] **FW-MED-3**: Document buffer sizing rationale; add `static_assert` for `txPayloadBuf` vs `MAX_TARGETS_WIRE` (`reachy-sensor.ino`) (2026-03-01)
 - [ ] **FW-MED-4**: Add `CMD_SET_GUARD_RAILS` for runtime-configurable BR/HR/distance thresholds
 - [x] **FW-MED-5**: Add hysteresis to `guessPose()` — ±5cm dead zone (50–60cm), holds previous pose in band (`reachy-sensor.ino`) (2026-03-01)
