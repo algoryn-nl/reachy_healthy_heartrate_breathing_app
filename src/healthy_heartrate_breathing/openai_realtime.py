@@ -139,6 +139,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             baseline_max_age_days=env_int("HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS", 90, min_value=1),
             baseline_path=self._resolve_runtime_data_path("light_context_baseline.json"),
             analytics_path=self._resolve_runtime_data_path("light_context_analytics.jsonl"),
+            analytics_max_bytes=env_int("HEALTHY_LIGHT_ANALYTICS_MAX_BYTES", 5_000_000, min_value=1024),
         )
         logger.info(
             "Light-context policy: enabled=%s, analytics=%s, user_id=%s, baseline=%s",

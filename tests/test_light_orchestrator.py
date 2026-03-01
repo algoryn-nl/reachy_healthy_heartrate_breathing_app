@@ -415,6 +415,62 @@ class TestAnalyticsPermissions:
         assert not analytics_path.exists()
 
 
+class TestAnalyticsRotation:
+    """Verify analytics JSONL file rotation when size cap is exceeded."""
+
+    def test_rotation_triggers_when_file_exceeds_max_bytes(self, tmp_path: Path) -> None:
+        analytics_path = tmp_path / "analytics.jsonl"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=500)
+        # Write enough events to exceed 500 bytes multiple times
+        for i in range(10):
+            o._append_analytics_event(source_tool="test", lux=float(i), result={"context_state": "bright"})
+        assert analytics_path.exists()
+        backup = analytics_path.parent / (analytics_path.name + ".1")
+        assert backup.exists()
+        # Without rotation, 10 events would be ~3000+ bytes; with rotation the main
+        # file holds at most one cap-cycle worth of events (cap + one event overhead)
+        assert analytics_path.stat().st_size < 500 * 3
+
+    def test_rotation_overwrites_previous_backup(self, tmp_path: Path) -> None:
+        analytics_path = tmp_path / "analytics.jsonl"
+        backup = analytics_path.parent / (analytics_path.name + ".1")
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=300)
+        # First rotation
+        for i in range(10):
+            o._append_analytics_event(source_tool="test", lux=float(i), result={"context_state": "a"})
+        assert backup.exists()
+        first_backup_content = backup.read_text(encoding="utf-8")
+        # Second rotation — backup should be replaced
+        for i in range(10):
+            o._append_analytics_event(source_tool="test", lux=float(i + 100), result={"context_state": "b"})
+        second_backup_content = backup.read_text(encoding="utf-8")
+        assert second_backup_content != first_backup_content
+
+    def test_no_rotation_when_under_cap(self, tmp_path: Path) -> None:
+        analytics_path = tmp_path / "analytics.jsonl"
+        o = _orchestrator(
+            tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=1_000_000
+        )
+        o._append_analytics_event(source_tool="test", lux=42.0, result={"context_state": "dim"})
+        backup = analytics_path.parent / (analytics_path.name + ".1")
+        assert not backup.exists()
+        assert analytics_path.exists()
+        lines = analytics_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 1
+
+    def test_rotation_preserves_new_event_after_rotate(self, tmp_path: Path) -> None:
+        analytics_path = tmp_path / "analytics.jsonl"
+        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path, analytics_max_bytes=200)
+        for i in range(10):
+            o._append_analytics_event(source_tool="test", lux=float(i), result={"context_state": "x"})
+        # After rotation, main file should contain at least the last event
+        content = analytics_path.read_text(encoding="utf-8").strip()
+        assert len(content) > 0
+        last_line = content.split("\n")[-1]
+        parsed = json.loads(last_line)
+        assert parsed["event"] == "light_context_decision"
+
+
 class TestPruneStaleEdgeCases:
     """Edge cases in _prune_stale_users for non-dict user entries."""
 

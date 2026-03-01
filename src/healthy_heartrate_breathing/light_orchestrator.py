@@ -39,6 +39,7 @@ class LightOrchestrator:
         analytics_path: Path | None = None,
         baseline_save_interval_s: float = 60.0,
         baseline_max_age_days: int = 90,
+        analytics_max_bytes: int = 5_000_000,
     ) -> None:
         self.enabled = enabled
         self.analytics_enabled = analytics_enabled
@@ -55,6 +56,7 @@ class LightOrchestrator:
         self.analytics_path = analytics_path
         self.baseline_save_interval_s = baseline_save_interval_s
         self.baseline_max_age_days = baseline_max_age_days
+        self.analytics_max_bytes = analytics_max_bytes
 
         # Mutable state
         self._baseline_state: dict[str, Any] = {"schema_version": 1, "users": {}}
@@ -244,6 +246,21 @@ class LightOrchestrator:
 
     # ---- Analytics ----
 
+    def _maybe_rotate_analytics(self) -> None:
+        """Rotate analytics JSONL when file exceeds analytics_max_bytes."""
+        if self.analytics_path is None or not self.analytics_path.exists():
+            return
+        try:
+            if self.analytics_path.stat().st_size <= self.analytics_max_bytes:
+                return
+        except OSError:
+            return
+        backup = self.analytics_path.parent / (self.analytics_path.name + ".1")
+        try:
+            self.analytics_path.replace(backup)
+        except OSError as e:
+            logger.warning("Failed rotating analytics %s: %s", self.analytics_path, e)
+
     def _append_analytics_event(self, *, source_tool: str, lux: float | None, result: dict[str, Any]) -> None:
         """Append one light-context analytics row as JSONL."""
         if not self.analytics_enabled or self.analytics_path is None:
@@ -264,6 +281,7 @@ class LightOrchestrator:
         }
         try:
             self.analytics_path.parent.mkdir(parents=True, exist_ok=True)
+            self._maybe_rotate_analytics()
             with self.analytics_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=True) + "\n")
         except Exception as e:
