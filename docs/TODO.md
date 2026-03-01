@@ -29,11 +29,11 @@
 
 ### Upcoming — Medium Priority
 
-- [ ] **PY-MED-1**: Change `GET /personalities/save_raw` to POST in `headless_personality_ui.py:191-209`
-- [ ] **PY-MED-2**: Remove duplicate sample rate assignments in `openai_realtime.py:73-80`
+- [x] **PY-MED-1**: Remove redundant `GET /personalities/save_raw` endpoint — POST variant already exists (`headless_personality_ui.py`) (2026-03-01)
+- [x] **PY-MED-2**: Remove duplicate sample rate assignments in `openai_realtime.py` — single typed assignment with `Literal[24000]` (2026-03-01)
 - [ ] **PY-MED-3**: Defer `last_activity_time` init to `start_up()` in `openai_realtime.py:85`; add lock for concurrent access
-- [ ] **PY-MED-4**: Fix float equality comparison for timestamps in `camera_worker.py:175`
-- [ ] **PY-MED-5**: Make `move_queue` private (prefix `_`) in `moves.py:307`
+- [x] **PY-MED-4**: Fix float equality comparison for timestamps in `camera_worker.py` — use `abs() < 1e-9` (2026-03-01)
+- [x] **PY-MED-5**: Make `move_queue` private (`_move_queue`) in `moves.py` — public API via `clear_move_queue()` unchanged (2026-03-01)
 - [ ] **PY-MED-6**: Replace API key polling loop with event-based signaling in `console.py:376-385`
 - [ ] **PY-MED-7**: Decompose `launch()` into smaller methods in `console.py:322-385`
 - [ ] **PY-MED-8**: Add analytics JSONL file rotation or size cap in `light_orchestrator.py`
@@ -51,7 +51,7 @@
 - [ ] **PY-LOW-2**: Log warning in `_safe_load_obj()` instead of silent `{}` return
 - [ ] **PY-LOW-3**: Defer `sys.modules` insertion in `_load_module_from_file()` until after `exec_module()` succeeds
 - [ ] **PY-LOW-4**: Add error handling to `sweep_look.py`; synchronize `max_angle` with mmWave sweep values
-- [ ] **PY-LOW-5**: Consolidate personality REST save endpoints (remove redundant GET variant)
+- [x] **PY-LOW-5**: Consolidate personality REST save endpoints — redundant GET variant removed with PY-MED-1 (2026-03-01)
 - [ ] **FW-LOW-1**: Replace `0x00` magic literal with `FRAME_DELIMITER` named constant
 - [ ] **FW-LOW-2**: Add firmware unit test harness for state machine, COBS codec, and CRC
 

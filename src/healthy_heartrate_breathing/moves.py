@@ -304,7 +304,7 @@ class MovementManager:
         self.state.last_primary_pose = (neutral_pose, (0.0, 0.0), 0.0)
 
         # Move queue (primary moves)
-        self.move_queue: deque[Move] = deque()
+        self._move_queue: deque[Move] = deque()
 
         # Configuration
         self.idle_inactivity_delay = IDLE_INACTIVITY_DELAY_S
@@ -454,7 +454,7 @@ class MovementManager:
         """Handle a single cross-thread command."""
         if command == "queue_move":
             if isinstance(payload, Move):
-                self.move_queue.append(payload)
+                self._move_queue.append(payload)
                 self.state.update_activity()
                 duration = getattr(payload, "duration", None)
                 if duration is not None:
@@ -467,12 +467,12 @@ class MovementManager:
                 logger.debug(
                     "Queued move with duration %ss, queue size: %s",
                     duration_str,
-                    len(self.move_queue),
+                    len(self._move_queue),
                 )
             else:
                 logger.warning("Ignored queue_move command with invalid payload: %s", payload)
         elif command == "clear_queue":
-            self.move_queue.clear()
+            self._move_queue.clear()
             self.state.current_move = None
             self.state.move_start_time = None
             self._breathing_active = False
@@ -527,8 +527,8 @@ class MovementManager:
             self.state.current_move = None
             self.state.move_start_time = None
 
-            if self.move_queue:
-                self.state.current_move = self.move_queue.popleft()
+            if self._move_queue:
+                self.state.current_move = self._move_queue.popleft()
                 self.state.move_start_time = current_time
                 # Any real move cancels breathing mode flag
                 self._breathing_active = isinstance(self.state.current_move, BreathingMove)
@@ -538,7 +538,7 @@ class MovementManager:
         """Manage automatic breathing when idle."""
         if (
             self.state.current_move is None
-            and not self.move_queue
+            and not self._move_queue
             and not self._is_listening
             and not self._breathing_active
         ):
@@ -558,13 +558,13 @@ class MovementManager:
                         interpolation_start_antennas=current_antennas,
                         interpolation_duration=BREATHING_INTERPOLATION_DURATION_S,
                     )
-                    self.move_queue.append(breathing_move)
+                    self._move_queue.append(breathing_move)
                     logger.debug("Started breathing after %.1fs of inactivity", idle_for)
                 except Exception as e:
                     self._breathing_active = False
                     logger.error("Failed to start breathing: %s", e)
 
-        if isinstance(self.state.current_move, BreathingMove) and self.move_queue:
+        if isinstance(self.state.current_move, BreathingMove) and self._move_queue:
             self.state.current_move = None
             self.state.move_start_time = None
             self._breathing_active = False
@@ -831,7 +831,7 @@ class MovementManager:
         body_yaw = pose_snapshot[2] if pose_snapshot else None
 
         return {
-            "queue_size": len(self.move_queue),
+            "queue_size": len(self._move_queue),
             "is_listening": self._shared_is_listening,
             "breathing_active": self._breathing_active,
             "last_commanded_pose": {

@@ -188,26 +188,6 @@ def mount_personality_routes(
         except Exception as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
 
-    @app.get("/personalities/save_raw")
-    async def _save_raw_get(name: str, instructions: str = "", tools_text: str = "", voice: str = "cedar") -> dict:  # type: ignore
-        name_s = _sanitize_name(name)
-        if not name_s:
-            return JSONResponse({"ok": False, "error": "invalid_name"}, status_code=400)  # type: ignore
-        try:
-            logger.info(
-                "Headless save_raw(GET): name=%r voice=%r instr_len=%d tools_len=%d",
-                name_s,
-                voice,
-                len(instructions),
-                len(tools_text),
-            )
-            _write_profile(name_s, instructions, tools_text, voice or "cedar")
-            value = f"user_personalities/{name_s}"
-            choices = [DEFAULT_OPTION, *list_personalities()]
-            return {"ok": True, "value": value, "choices": choices}
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)  # type: ignore
-
     @app.post("/personalities/apply")
     async def _apply(
         payload: ApplyPayload | None = None,
