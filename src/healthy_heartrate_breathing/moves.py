@@ -312,6 +312,7 @@ class MovementManager:
         self.target_period = 1.0 / self.target_frequency
 
         self._stop_event = threading.Event()
+        self._lifecycle_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._is_listening = False
         self._last_commanded_pose: FullBodyPose = clone_full_body_pose(self.state.last_primary_pose)
@@ -763,34 +764,35 @@ class MovementManager:
 
     def start(self) -> None:
         """Start the worker thread that drives the 100 Hz control loop."""
-        if self._thread is not None and self._thread.is_alive():
-            logger.warning("Move worker already running; start() ignored")
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self.working_loop, daemon=True)
-        self._thread.start()
-        logger.debug("Move worker started")
+        with self._lifecycle_lock:
+            if self._thread is not None and self._thread.is_alive():
+                logger.warning("Move worker already running; start() ignored")
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self.working_loop, daemon=True)
+            self._thread.start()
+            logger.debug("Move worker started")
 
     def stop(self) -> None:
         """Request the worker thread to stop and wait for it to exit.
 
         Before stopping, resets the robot to a neutral position.
         """
-        if self._thread is None or not self._thread.is_alive():
-            logger.debug("Move worker not running; stop() ignored")
-            return
+        with self._lifecycle_lock:
+            if self._thread is None or not self._thread.is_alive():
+                logger.debug("Move worker not running; stop() ignored")
+                return
 
-        logger.info("Stopping movement manager and resetting to neutral position...")
+            logger.info("Stopping movement manager and resetting to neutral position...")
 
-        # Clear any queued moves and stop current move
-        self.clear_move_queue()
+            # Clear any queued moves and stop current move
+            self.clear_move_queue()
 
-        # Stop the worker thread first so it doesn't interfere
-        self._stop_event.set()
-        if self._thread is not None:
+            # Stop the worker thread first so it doesn't interfere
+            self._stop_event.set()
             self._thread.join()
             self._thread = None
-        logger.debug("Move worker stopped")
+            logger.debug("Move worker stopped")
 
         # Reset to neutral position using goto_target (same approach as wake_up)
         try:

@@ -21,7 +21,7 @@
 - [ ] **PY-HIGH-2**: Add locking to tool registry globals in `tools/core_tools.py:38-40`
 - [x] **PY-HIGH-3**: Add independent `asyncio.wait_for()` timeout to auto light_context dispatch in `tool_dispatcher.py:397-411` (2026-02-28)
 - [ ] **PY-HIGH-4**: Fix HeadWobbler TOCTOU race — lock before generation check; fix queue drain in `reset()` (`audio/head_wobbler.py:78-81,156-165`)
-- [ ] **PY-HIGH-5**: Guard `MovementManager.start()` against thread leak — check `_thread.is_alive()` before creating new thread (`moves.py:766-771`)
+- [x] **PY-HIGH-5**: Guard `MovementManager.start()` against thread leak — `_lifecycle_lock` serialises `start()`/`stop()`; `is_alive()` guard + 7 tests incl. concurrent-safety (`moves.py`, `tests/test_moves.py`) (2026-03-01)
 - [x] **PY-HIGH-6**: Fix type annotation `robot: ReachyMini = None` → `robot: ReachyMini | None = None` (`main.py:39`) (2026-02-28)
 - [x] **FW-HIGH-1**: Handle COBS encode overflow — increment `txDropCount` diagnostic counter on silent drop; surfaced via EVT_DIAG (`reachy-sensor.ino`) (2026-02-28)
 - [x] **FW-HIGH-2**: Add sensor error telemetry — `mmwaveFailCount`/`mmwaveConsecutiveFails` counters + periodic EVT_DIAG emission (`reachy-sensor.ino`) (2026-02-28)
@@ -125,7 +125,7 @@
 - ~~**`sys.exit()` in library code** (`config.py`, `prompts.py`): Blocks testability, prevents graceful error recovery.~~ (fixed: `ConfigError` exception + `main.py` catch; 2026-02-28)
 - ~~**Path traversal in personality management**: User-supplied profile names not validated against directory escape.~~ (fixed: `resolve().is_relative_to()` containment checks in both headless and Gradio paths + `_write_profile` defense-in-depth; 33 security tests; 2026-02-28)
 - ~~**Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere.~~ (fixed: removed redundant `or DEFAULT` fallbacks — thresholds already resolved via `coerce_float()` with defaults; audited codebase, no other instances; 4 regression tests; 2026-02-28)
-- **Thread safety gaps**: Tool registry globals unprotected; HeadWobbler generation TOCTOU; camera_worker state transitions unsynchronized. Priority: high.
+- **Thread safety gaps**: Tool registry globals unprotected; HeadWobbler generation TOCTOU; camera_worker state transitions unsynchronized. ~~MovementManager start/stop~~ (fixed: `_lifecycle_lock`, 2026-03-01). Priority: high.
 - ~~**Firmware vitals logic bugs**: Hysteresis bypass in emitBio, stale vitals in fallback lock, dist_ok race condition.~~ (fixed: 2026-02-28)
 - **Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase. Priority: medium.
 - **Config singleton at import time**: `config = Config()` in `config.py` module body. Import-time failure cascades to all dependents. Priority: medium.
