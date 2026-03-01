@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from healthy_heartrate_breathing.idle_policy import IdlePolicy
 
 
@@ -235,3 +237,63 @@ class TestMultiTarget:
         assert p.suggest_scan_only is True
         p.record_no_target(sweep_was_used=False)
         assert p.suggest_scan_only is False
+
+
+class TestConstructorValidation:
+    """PY-LOW-1: Constructor rejects invalid parameters with ValueError."""
+
+    def test_interval_s_too_low(self) -> None:
+        with pytest.raises(ValueError, match="interval_s"):
+            _policy(interval_s=0.5)
+
+    def test_probe_interval_s_too_low(self) -> None:
+        with pytest.raises(ValueError, match="probe_interval_s"):
+            _policy(probe_interval_s=0.0)
+
+    def test_probe_duration_s_too_low(self) -> None:
+        with pytest.raises(ValueError, match="probe_duration_s"):
+            _policy(probe_duration_s=0.1)
+
+    def test_misses_before_sweep_too_low(self) -> None:
+        with pytest.raises(ValueError, match="misses_before_sweep"):
+            _policy(misses_before_sweep=0)
+
+    def test_sweep_cooldown_s_negative(self) -> None:
+        with pytest.raises(ValueError, match="sweep_cooldown_s"):
+            _policy(sweep_cooldown_s=-1.0)
+
+    def test_post_focus_quiet_s_negative(self) -> None:
+        with pytest.raises(ValueError, match="post_focus_quiet_s"):
+            _policy(post_focus_quiet_s=-0.1)
+
+    def test_errors_before_suppression_too_low(self) -> None:
+        with pytest.raises(ValueError, match="errors_before_suppression"):
+            _policy(errors_before_suppression=0)
+
+    def test_error_backoff_s_too_low(self) -> None:
+        with pytest.raises(ValueError, match="error_backoff_s"):
+            _policy(error_backoff_s=0.5)
+
+    def test_multi_target_interval_multiplier_too_low(self) -> None:
+        with pytest.raises(ValueError, match="multi_target_interval_multiplier"):
+            _policy(multi_target_interval_multiplier=0.5)
+
+    def test_minimum_valid_values_succeed(self) -> None:
+        """Edge case: all minimum allowed values should construct successfully."""
+        p = IdlePolicy(
+            interval_s=1.0,
+            probe_interval_s=1.0,
+            probe_duration_s=0.5,
+            misses_before_sweep=1,
+            sweep_cooldown_s=0.0,
+            post_focus_quiet_s=0.0,
+            errors_before_suppression=1,
+            error_backoff_s=1.0,
+            multi_target_interval_multiplier=1.0,
+        )
+        assert p.interval_s == 1.0
+
+    def test_existing_helper_defaults_are_valid(self) -> None:
+        """The _policy() helper with all defaults constructs successfully."""
+        p = _policy()
+        assert p.probe_interval_s == 40.0

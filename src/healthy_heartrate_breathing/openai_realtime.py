@@ -78,8 +78,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.connection: Any = None
         self.output_queue: "asyncio.Queue[Tuple[int, NDArray[np.int16]] | AdditionalOutputs]" = asyncio.Queue()
 
-        self.last_activity_time = asyncio.get_event_loop().time()
-        self.start_time = asyncio.get_event_loop().time()
+        self.last_activity_time = 0.0
+        self.start_time = 0.0
         self.is_idle_tool_call = False
         self.gradio_mode = gradio_mode
         self.instance_path = instance_path
@@ -314,6 +314,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
 
     async def _run_realtime_session(self) -> None:
         """Establish and manage a single realtime session."""
+        # Initialize monotonic timestamps now that an event loop is guaranteed.
+        now = asyncio.get_event_loop().time()
+        self.last_activity_time = now
+        self.start_time = now
         async with self.client.realtime.connect(model=config.MODEL_NAME) as conn:
             try:
                 await conn.session.update(

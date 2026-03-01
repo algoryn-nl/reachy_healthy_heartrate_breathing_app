@@ -7,6 +7,7 @@ import json
 import inspect
 import logging
 import importlib
+import threading
 import importlib.util
 from typing import Any, Dict, List
 from pathlib import Path
@@ -38,6 +39,7 @@ class ToolRegistryError(RuntimeError):
 ALL_TOOLS: Dict[str, "Tool"] = {}
 ALL_TOOL_SPECS: List[Dict[str, Any]] = []
 _TOOLS_INITIALIZED = False
+_REGISTRY_LOCK = threading.Lock()
 
 
 def _get_env_disabled_tools() -> set[str]:
@@ -108,7 +110,11 @@ def _load_module_from_file(module_name: str, file_path: Path) -> None:
         raise ModuleNotFoundError(f"Cannot create spec for {file_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
 
 
 def _try_load_tool(
@@ -273,30 +279,39 @@ def _load_profile_tools() -> list[str]:
 
 
 def _initialize_tools() -> None:
-    """Populate registry once, even if module is imported repeatedly."""
+    """Populate registry once, even if module is imported repeatedly.
+
+    Uses double-checked locking to prevent concurrent threads from
+    corrupting the registry.
+    """
     global ALL_TOOLS, ALL_TOOL_SPECS, _TOOLS_INITIALIZED
 
     if _TOOLS_INITIALIZED:
         logger.debug("Tools already initialized; skipping reinitialization.")
         return
 
-    requested_names = _load_profile_tools()
+    with _REGISTRY_LOCK:
+        if _TOOLS_INITIALIZED:
+            logger.debug("Tools already initialized (after lock); skipping.")
+            return
 
-    ALL_TOOLS = {cls.name: cls() for cls in get_concrete_subclasses(Tool)}  # type: ignore[type-abstract]
-    ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]
+        requested_names = _load_profile_tools()
 
-    for tool_name, tool in ALL_TOOLS.items():
-        logger.info(f"tool registered: {tool_name} - {tool.description}")
+        ALL_TOOLS = {cls.name: cls() for cls in get_concrete_subclasses(Tool)}  # type: ignore[type-abstract]
+        ALL_TOOL_SPECS = [tool.spec() for tool in ALL_TOOLS.values()]
 
-    missing = [name for name in requested_names if name not in ALL_TOOLS]
-    if missing:
-        logger.warning(
-            "tools.txt requested %d tool(s) that did not register a Tool subclass: %s",
-            len(missing),
-            missing,
-        )
+        for tool_name, tool in ALL_TOOLS.items():
+            logger.info(f"tool registered: {tool_name} - {tool.description}")
 
-    _TOOLS_INITIALIZED = True
+        missing = [name for name in requested_names if name not in ALL_TOOLS]
+        if missing:
+            logger.warning(
+                "tools.txt requested %d tool(s) that did not register a Tool subclass: %s",
+                len(missing),
+                missing,
+            )
+
+        _TOOLS_INITIALIZED = True
 
 
 def get_tool_specs(exclusion_list: list[str] | None = None) -> list[Dict[str, Any]]:

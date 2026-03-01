@@ -1476,3 +1476,30 @@ class TestPersistApiKey:
         content = env_file.read_text()
         assert "OPENAI_API_KEY=sk-real-key" in content
         assert "OTHER_VAR=value" in content
+
+
+class TestDeferredTimeInit:
+    """PY-MED-3: last_activity_time and start_time deferred to start_up()."""
+
+    def test_init_sets_zero(self) -> None:
+        """__init__ sets last_activity_time and start_time to 0.0 (no event loop call)."""
+        handler = _handler()
+        assert handler.last_activity_time == 0.0
+        assert handler.start_time == 0.0
+
+    @pytest.mark.asyncio
+    async def test_start_up_sets_loop_time(self, monkeypatch: Any) -> None:
+        """start_up() sets both timestamps to non-zero loop time."""
+        handler = _handler()
+        assert handler.last_activity_time == 0.0
+        assert handler.start_time == 0.0
+
+        client, conn = _make_event_client([])
+        monkeypatch.setattr(rt_mod, "get_session_instructions", lambda: "test")
+        monkeypatch.setattr(rt_mod, "get_session_voice", lambda: "cedar")
+        monkeypatch.setattr(rt_mod, "get_tool_specs", lambda: [])
+        handler.client = client
+        await handler._run_realtime_session()
+
+        assert handler.last_activity_time > 0.0
+        assert handler.start_time > 0.0

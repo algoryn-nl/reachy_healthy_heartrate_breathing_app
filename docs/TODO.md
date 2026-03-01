@@ -18,7 +18,7 @@
 ### Upcoming — High Priority
 
 - [x] **PY-HIGH-1**: Wrap `base64.b64decode()` in try/except in `audio_router.py:41` (2026-02-28)
-- [ ] **PY-HIGH-2**: Add locking to tool registry globals in `tools/core_tools.py:38-40`
+- [x] **PY-HIGH-2**: Add locking to tool registry globals in `tools/core_tools.py:38-40` — `_REGISTRY_LOCK` with double-checked locking; 2 thread-safety tests (2026-03-01)
 - [x] **PY-HIGH-3**: Add independent `asyncio.wait_for()` timeout to auto light_context dispatch in `tool_dispatcher.py:397-411` (2026-02-28)
 - [x] **PY-HIGH-4**: Fix HeadWobbler TOCTOU race — consolidated generation check + `_base_ts` init into single lock hold; generation guard inside `_sway_lock` before `sway.feed()`; `reset()` wraps state bump + `sway.reset()` in `_sway_lock` for atomicity; documented lock ordering (`_sway_lock` → `_state_lock`); 4 new thread-safety tests (`audio/head_wobbler.py`, `tests/audio/test_head_wobbler.py`) (2026-03-01)
 - [x] **PY-HIGH-5**: Guard `MovementManager.start()` against thread leak — `_lifecycle_lock` serialises `start()`/`stop()`; `is_alive()` guard + 7 tests incl. concurrent-safety (`moves.py`, `tests/test_moves.py`) (2026-03-01)
@@ -31,7 +31,7 @@
 
 - [x] **PY-MED-1**: Remove redundant `GET /personalities/save_raw` endpoint — POST variant already exists (`headless_personality_ui.py`) (2026-03-01)
 - [x] **PY-MED-2**: Remove duplicate sample rate assignments in `openai_realtime.py` — single typed assignment with `Literal[24000]` (2026-03-01)
-- [ ] **PY-MED-3**: Defer `last_activity_time` init to `start_up()` in `openai_realtime.py:85`; add lock for concurrent access
+- [x] **PY-MED-3**: Defer `last_activity_time` init to `_run_realtime_session()` in `openai_realtime.py` — `__init__` sets `0.0`, session start sets loop time; no lock needed (single async thread); 2 tests (2026-03-01)
 - [x] **PY-MED-4**: Fix float equality comparison for timestamps in `camera_worker.py` — use `abs() < 1e-9` (2026-03-01)
 - [x] **PY-MED-5**: Make `move_queue` private (`_move_queue`) in `moves.py` — public API via `clear_move_queue()` unchanged (2026-03-01)
 - [x] **PY-MED-6**: Replace API key polling loop with `threading.Event` — `_api_key_event` signaled from `_persist_api_key()`; no more busy-poll (`console.py`) (2026-03-01)
@@ -47,10 +47,10 @@
 
 ### Upcoming — Low Priority
 
-- [ ] **PY-LOW-1**: Validate IdlePolicy constructor parameters (reject negative/zero timings)
+- [x] **PY-LOW-1**: Validate IdlePolicy constructor parameters (reject negative/zero timings) — 9 `ValueError` checks matching constraint table; 12 tests (2026-03-01)
 - [ ] **PY-LOW-2**: Log warning in `_safe_load_obj()` instead of silent `{}` return
-- [ ] **PY-LOW-3**: Defer `sys.modules` insertion in `_load_module_from_file()` until after `exec_module()` succeeds
-- [ ] **PY-LOW-4**: Add error handling to `sweep_look.py`; synchronize `max_angle` with mmWave sweep values
+- [x] **PY-LOW-3**: Clean up `sys.modules` on `exec_module()` failure in `_load_module_from_file()` — try/except + pop on error; 2 tests (2026-03-01)
+- [x] **PY-LOW-4**: Add error handling + named constants to `sweep_look.py` — `SWEEP_MAX_ANGLE_RAD`, `SWEEP_TRANSITION_S`, `SWEEP_HOLD_S`; try/except returns error dict; docstring documents angle difference from mmWave; 3 tests (2026-03-01)
 - [x] **PY-LOW-5**: Consolidate personality REST save endpoints — redundant GET variant removed with PY-MED-1 (2026-03-01)
 - [ ] **FW-LOW-1**: Replace `0x00` magic literal with `FRAME_DELIMITER` named constant
 - [ ] **FW-LOW-2**: Add firmware unit test harness for state machine, COBS codec, and CRC
@@ -61,7 +61,7 @@
 - [ ] Add TranscriptHandler tests for rapid concurrent `on_partial()` calls
 - [ ] Add ToolDispatcher tests for light_context timeout and malformed sensor state JSON
 - [x] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()` (17 tests; 2026-02-28)
-- [ ] Add sweep_look failure-path tests (robot operation errors)
+- [x] Add sweep_look failure-path tests (robot operation errors) (3 tests; 2026-03-01)
 - [x] Add multi-threaded tests for `head_wobbler.py` — deadlock stress test, atomicity test, sway state invariants, rapid reset cycles (4 tests; 2026-03-01)
 - [ ] Add multi-threaded tests for `moves.py`
 - [x] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression; 4 tests; 2026-02-28)
@@ -126,7 +126,7 @@
 - ~~**`sys.exit()` in library code** (`config.py`, `prompts.py`): Blocks testability, prevents graceful error recovery.~~ (fixed: `ConfigError` exception + `main.py` catch; 2026-02-28)
 - ~~**Path traversal in personality management**: User-supplied profile names not validated against directory escape.~~ (fixed: `resolve().is_relative_to()` containment checks in both headless and Gradio paths + `_write_profile` defense-in-depth; 33 security tests; 2026-02-28)
 - ~~**Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere.~~ (fixed: removed redundant `or DEFAULT` fallbacks — thresholds already resolved via `coerce_float()` with defaults; audited codebase, no other instances; 4 regression tests; 2026-02-28)
-- **Thread safety gaps**: Tool registry globals unprotected; camera_worker state transitions unsynchronized. ~~MovementManager start/stop~~ (fixed: `_lifecycle_lock`, 2026-03-01). ~~HeadWobbler generation TOCTOU~~ (fixed: consolidated lock hold + generation guard inside `_sway_lock`, 2026-03-01). Priority: high.
+- **Thread safety gaps**: ~~Tool registry globals unprotected~~ (fixed: `_REGISTRY_LOCK` with double-checked locking, 2026-03-01); camera_worker state transitions unsynchronized. ~~MovementManager start/stop~~ (fixed: `_lifecycle_lock`, 2026-03-01). ~~HeadWobbler generation TOCTOU~~ (fixed: consolidated lock hold + generation guard inside `_sway_lock`, 2026-03-01). Priority: high.
 - ~~**Firmware vitals logic bugs**: Hysteresis bypass in emitBio, stale vitals in fallback lock, dist_ok race condition.~~ (fixed: 2026-02-28)
 - **Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase. Priority: medium.
 - **Config singleton at import time**: `config = Config()` in `config.py` module body. Import-time failure cascades to all dependents. Priority: medium.

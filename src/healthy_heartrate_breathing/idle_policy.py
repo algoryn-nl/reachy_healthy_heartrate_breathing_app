@@ -171,6 +171,26 @@ class IdlePolicy:
         error_backoff_s: float = DEFAULT_ERROR_BACKOFF_S,
         multi_target_interval_multiplier: float = DEFAULT_MULTI_TARGET_INTERVAL_MULTIPLIER,
     ) -> None:
+        if interval_s < 1.0:
+            raise ValueError(f"interval_s must be >= 1.0, got {interval_s}")
+        if probe_interval_s < 1.0:
+            raise ValueError(f"probe_interval_s must be >= 1.0, got {probe_interval_s}")
+        if probe_duration_s < 0.5:
+            raise ValueError(f"probe_duration_s must be >= 0.5, got {probe_duration_s}")
+        if misses_before_sweep < 1:
+            raise ValueError(f"misses_before_sweep must be >= 1, got {misses_before_sweep}")
+        if sweep_cooldown_s < 0.0:
+            raise ValueError(f"sweep_cooldown_s must be >= 0.0, got {sweep_cooldown_s}")
+        if post_focus_quiet_s < 0.0:
+            raise ValueError(f"post_focus_quiet_s must be >= 0.0, got {post_focus_quiet_s}")
+        if errors_before_suppression < 1:
+            raise ValueError(f"errors_before_suppression must be >= 1, got {errors_before_suppression}")
+        if error_backoff_s < 1.0:
+            raise ValueError(f"error_backoff_s must be >= 1.0, got {error_backoff_s}")
+        if multi_target_interval_multiplier < 1.0:
+            raise ValueError(
+                f"multi_target_interval_multiplier must be >= 1.0, got {multi_target_interval_multiplier}"
+            )
         self.interval_s = interval_s
         self.probe_interval_s = probe_interval_s
         self.probe_duration_s = probe_duration_s
@@ -295,8 +315,7 @@ class IdlePolicy:
         self.last_error_time = now
         if self.consecutive_errors >= self.errors_before_suppression:
             logger.warning(
-                "Idle mmWave sensor appears disconnected (%d consecutive errors); "
-                "suppressing probes for %.0fs.",
+                "Idle mmWave sensor appears disconnected (%d consecutive errors); suppressing probes for %.0fs.",
                 self.consecutive_errors,
                 self.error_backoff_s,
             )
