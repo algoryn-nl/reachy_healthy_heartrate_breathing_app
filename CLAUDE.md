@@ -243,7 +243,7 @@ Data flows: mmWave tool result (including errors) → `extract_sensor_state()` i
 - Maintains per-user rolling lux baseline (EMA per hour-of-day, persisted to JSON; stale entries pruned on load after `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS`, default 90)
 - Baseline saves throttled with dirty flag + configurable interval (default 60s); flushed at shutdown
 - Outputs context state, recommended conversation mode, and action suggestions
-- JSONL analytics logging (when `HEALTHY_LIGHT_ANALYTICS_ENABLED` is true); file rotated at `HEALTHY_LIGHT_ANALYTICS_MAX_BYTES` (default 5 MB) with 1 backup
+- SQLite analytics storage (when `HEALTHY_LIGHT_ANALYTICS_ENABLED` is true); time-based retention via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` (default 90)
 
 ### Key Dependencies
 
@@ -420,7 +420,7 @@ Key configuration (see `.env.example`):
 | `HEALTHY_LIGHT_BASELINE_ALPHA` | `0.15` | EMA smoothing factor for lux baseline |
 | `HEALTHY_LIGHT_BASELINE_MIN_SAMPLES` | `5` | Minimum samples before baseline is used |
 | `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS` | `90` | Days before stale user baselines are pruned |
-| `HEALTHY_LIGHT_ANALYTICS_MAX_BYTES` | `5000000` | Max analytics JSONL file size before rotation (1 backup kept) |
+| `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` | `90` | Days before old analytics rows are pruned |
 
 ### External Profiles/Tools
 

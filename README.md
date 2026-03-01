@@ -158,7 +158,7 @@ All configuration is via environment variables. Key variables:
 | `HEALTHY_LIGHT_SHARP_DROP_LUX` | `80` | Lux drop in 60 s to trigger unexpected_darkening |
 | `HEALTHY_LIGHT_PROLONGED_MIN` | `45` | Minutes of low light before strain-risk nudge |
 | `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS` | `90` | Days before stale user baselines are pruned |
-| `HEALTHY_LIGHT_ANALYTICS_MAX_BYTES` | `5000000` | Max analytics JSONL size before rotation |
+| `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` | `90` | Days before old analytics rows are pruned |
 | `HEALTHY_DISABLED_TOOLS` | *(empty)* | Comma-separated tool names to disable |
 | `HEALTHY_TOOL_DISPATCH_TIMEOUT_S` | `30` | Max seconds per tool call before timeout |
 
