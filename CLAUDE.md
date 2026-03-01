@@ -156,7 +156,7 @@ User-created personalities are stored under `profiles/user_personalities/<name>/
 
 ### Audio System (`audio/`)
 
-- `head_wobbler.py` — `HeadWobbler`: audio-reactive head motion, runs in its own thread, receives base64 audio deltas and converts amplitude to head pitch/yaw offsets via `set_speech_offsets`
+- `head_wobbler.py` — `HeadWobbler`: audio-reactive head motion, runs in its own thread, receives base64 audio deltas and converts amplitude to head pitch/yaw offsets via `set_speech_offsets`; lock ordering: `_sway_lock` → `_state_lock` (generation guard inside `_sway_lock` prevents stale audio from contaminating freshly-reset sway state)
 - `speech_tapper.py` — speech amplitude analysis utilities
 
 ### Vision System (`vision/`)
@@ -443,7 +443,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (318 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, device_context integration, EVT_DIAG diagnostics decode and integration, and full openai_realtime coverage)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (387 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, and HeadWobbler thread-safety/deadlock tests)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

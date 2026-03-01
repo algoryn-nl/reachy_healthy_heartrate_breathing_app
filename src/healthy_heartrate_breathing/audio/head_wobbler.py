@@ -20,7 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 class HeadWobbler:
-    """Converts audio deltas (base64) into head movement offsets."""
+    """Converts audio deltas (base64) into head movement offsets.
+
+    Lock ordering: ``_sway_lock`` → ``_state_lock``.  Code that needs both
+    locks must acquire ``_sway_lock`` first.  Acquiring ``_state_lock`` alone
+    (without ``_sway_lock``) is always safe.
+    """
 
     def __init__(self, set_speech_offsets: Callable[[Tuple[float, float, float, float, float, float]], None]) -> None:
         """Initialize the head wobbler."""
@@ -75,18 +80,23 @@ class HeadWobbler:
                 continue
 
             try:
+                # Consolidated: generation check + _base_ts init in one lock hold
+                # to prevent reset() from clearing _base_ts between the two.
                 with self._state_lock:
                     current_generation = self._generation
-                if chunk_generation != current_generation:
-                    continue
-
-                if self._base_ts is None:
-                    with self._state_lock:
-                        if self._base_ts is None:
-                            self._base_ts = time.monotonic()
+                    if chunk_generation != current_generation:
+                        continue
+                    if self._base_ts is None:
+                        self._base_ts = time.monotonic()
 
                 pcm = np.asarray(chunk).squeeze(0)
+
+                # Generation guard inside _sway_lock prevents stale audio
+                # from contaminating freshly-reset sway state.
                 with self._sway_lock:
+                    with self._state_lock:
+                        if self._generation != current_generation:
+                            continue
                     results = self.sway.feed(pcm, sr)
 
                 i = 0
@@ -147,25 +157,28 @@ class HeadWobbler:
         logger.debug("Head wobbler thread exited")
 
     def reset(self) -> None:
-        """Reset the internal state."""
-        with self._state_lock:
-            self._generation += 1
-            self._base_ts = None
-            self._hops_done = 0
+        """Reset the internal state.
 
-        # Drain any queued audio chunks from previous generations
-        drained_any = False
+        Acquires ``_sway_lock`` first so the generation bump and sway reset
+        are atomic with respect to ``working_loop``'s ``sway.feed()`` call.
+        """
+        with self._sway_lock:
+            with self._state_lock:
+                self._generation += 1
+                self._base_ts = None
+                self._hops_done = 0
+            self.sway.reset()
+
+        # Drain any queued audio chunks from previous generations.
+        drained = 0
         while True:
             try:
-                _, _, _ = self.audio_queue.get_nowait()
+                self.audio_queue.get_nowait()
             except queue.Empty:
                 break
             else:
-                drained_any = True
                 self.audio_queue.task_done()
+                drained += 1
 
-        with self._sway_lock:
-            self.sway.reset()
-
-        if drained_any:
-            logger.debug("Head wobbler queue drained during reset")
+        if drained:
+            logger.debug("Head wobbler queue drained %d item(s) during reset", drained)

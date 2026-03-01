@@ -108,3 +108,163 @@ def test_reset_during_inflight_chunk_keeps_worker(monkeypatch: Any) -> None:
         assert wobbler._thread.is_alive()
     finally:
         wobbler.stop()
+
+
+# --- Thread-safety tests (PY-HIGH-4) ---
+
+
+def test_generation_not_bumped_while_sway_feed_blocked(monkeypatch: Any) -> None:
+    """Generation must not be bumped while sway.feed() holds _sway_lock.
+
+    With the fix, reset() acquires _sway_lock before bumping generation,
+    so generation stays stable until sway.feed() completes.  With the old
+    code, reset() bumps generation outside _sway_lock — this test fails.
+    """
+    wobbler, captured = _start_wobbler()
+    feed_started = threading.Event()
+    allow_feed = threading.Event()
+    original = wobbler.sway.feed
+
+    def slow_feed(pcm: Any, sr: Any) -> Any:
+        feed_started.set()
+        allow_feed.wait(timeout=2.0)
+        return original(pcm, sr)
+
+    monkeypatch.setattr(wobbler.sway, "feed", slow_feed)
+
+    try:
+        wobbler.feed(_make_audio_chunk(duration_s=0.35))
+        assert feed_started.wait(timeout=1.0), "worker didn't reach sway.feed"
+
+        with wobbler._state_lock:
+            gen_before = wobbler._generation
+
+        # Start reset in background — should block on _sway_lock
+        reset_done = threading.Event()
+
+        def do_reset() -> None:
+            wobbler.reset()
+            reset_done.set()
+
+        threading.Thread(target=do_reset, daemon=True).start()
+        time.sleep(0.1)  # give reset thread time to reach _sway_lock
+
+        # While sway.feed is blocked, generation must NOT have changed
+        with wobbler._state_lock:
+            gen_during = wobbler._generation
+        assert gen_during == gen_before, f"generation bumped while sway.feed blocked: {gen_before} -> {gen_during}"
+
+        # Release sway.feed -> reset completes
+        allow_feed.set()
+        assert reset_done.wait(timeout=2.0), "reset didn't complete"
+
+        # NOW generation should be bumped
+        with wobbler._state_lock:
+            gen_after = wobbler._generation
+        assert gen_after == gen_before + 1
+    finally:
+        wobbler.stop()
+
+
+def test_concurrent_reset_feed_no_deadlock() -> None:
+    """Rapid interleaving of feed() and reset() must not deadlock.
+
+    Verifies the lock ordering (_sway_lock -> _state_lock) doesn't
+    create circular dependencies under concurrent access.
+    """
+    wobbler, captured = _start_wobbler()
+    stop = threading.Event()
+    errors: List[str] = []
+
+    def feeder() -> None:
+        while not stop.is_set():
+            try:
+                wobbler.feed(_make_audio_chunk(duration_s=0.05))
+            except Exception as e:
+                errors.append(f"feed: {e}")
+            time.sleep(0.005)
+
+    def resetter() -> None:
+        while not stop.is_set():
+            try:
+                wobbler.reset()
+            except Exception as e:
+                errors.append(f"reset: {e}")
+            time.sleep(0.01)
+
+    try:
+        threads = [
+            threading.Thread(target=feeder, daemon=True),
+            threading.Thread(target=resetter, daemon=True),
+        ]
+        for t in threads:
+            t.start()
+
+        time.sleep(0.5)
+        stop.set()
+
+        for t in threads:
+            t.join(timeout=2.0)
+            assert not t.is_alive(), "thread hung — possible deadlock"
+
+        assert not errors, f"concurrent errors: {errors}"
+        assert wobbler._thread is not None and wobbler._thread.is_alive()
+    finally:
+        wobbler.stop()
+
+
+def test_reset_during_sway_feed_leaves_clean_state(monkeypatch: Any) -> None:
+    """After reset during in-flight sway.feed(), sway state must be clean."""
+    wobbler, captured = _start_wobbler()
+    feed_started = threading.Event()
+    allow_feed = threading.Event()
+    original = wobbler.sway.feed
+
+    def slow_feed(pcm: Any, sr: Any) -> Any:
+        feed_started.set()
+        allow_feed.wait(timeout=2.0)
+        return original(pcm, sr)
+
+    monkeypatch.setattr(wobbler.sway, "feed", slow_feed)
+
+    try:
+        wobbler.feed(_make_audio_chunk(duration_s=0.35))
+        assert feed_started.wait(timeout=1.0), "worker didn't reach sway.feed"
+
+        reset_done = threading.Event()
+
+        def do_reset() -> None:
+            wobbler.reset()
+            reset_done.set()
+
+        threading.Thread(target=do_reset, daemon=True).start()
+        time.sleep(0.05)
+        allow_feed.set()
+        assert reset_done.wait(timeout=2.0), "reset didn't complete"
+
+        # After reset, all mutable state must be clean
+        with wobbler._sway_lock:
+            assert wobbler.sway.t == 0.0, f"sway.t contaminated: {wobbler.sway.t}"
+            assert wobbler.sway.carry.size == 0
+            assert len(wobbler.sway.samples) == 0
+        with wobbler._state_lock:
+            assert wobbler._base_ts is None
+            assert wobbler._hops_done == 0
+    finally:
+        wobbler.stop()
+
+
+def test_rapid_reset_cycles_preserve_worker() -> None:
+    """Worker thread survives many rapid reset cycles and processes new audio."""
+    wobbler, captured = _start_wobbler()
+    try:
+        for i in range(20):
+            wobbler.feed(_make_audio_chunk(duration_s=0.05))
+            wobbler.reset()
+            assert wobbler._thread is not None and wobbler._thread.is_alive(), f"worker died at cycle {i}"
+
+        pre = len(captured)
+        wobbler.feed(_make_audio_chunk(duration_s=0.35))
+        assert _wait_for(lambda: len(captured) > pre), "no offsets after rapid reset cycles"
+    finally:
+        wobbler.stop()
