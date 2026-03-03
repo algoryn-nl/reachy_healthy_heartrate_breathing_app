@@ -35,7 +35,7 @@
 - [x] **PY-MED-4**: Fix float equality comparison for timestamps in `camera_worker.py` — use `abs() < 1e-9` (2026-03-01)
 - [x] **PY-MED-5**: Make `move_queue` private (`_move_queue`) in `moves.py` — public API via `clear_move_queue()` unchanged (2026-03-01)
 - [x] **PY-MED-6**: Replace API key polling loop with `threading.Event` — `_api_key_event` signaled from `_persist_api_key()`; no more busy-poll (`console.py`) (2026-03-01)
-- [ ] **PY-MED-7**: Decompose `launch()` into smaller methods in `console.py:322-385`
+- [x] **PY-MED-7**: Decompose launch() into smaller methods in console.py — extracted _load_instance_env(), _acquire_api_key_from_hf(), _wait_for_api_key(), _run_async_session() (2026-03-03)
 - [x] **PY-MED-8**: Migrate analytics from JSONL to SQLite in `light_orchestrator.py` — `_init_analytics_db()` creates WAL-mode DB with flattened `light_events` table; time-based retention via `_prune_analytics()` (configurable via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS`, default 90 days); lazy DB init on first write; 8 tests (2026-03-01)
 - [x] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()` — `sys.platform`-conditional patterns: macOS gets `cu.usbmodem`/`tty.usbmodem`, Linux gets `ttyACM`/`ttyUSB` (2026-03-01)
 - [ ] **PY-MED-10**: Standardize tool error handling — error dicts for tools, exceptions for libraries, no `sys.exit()` outside `main()`
