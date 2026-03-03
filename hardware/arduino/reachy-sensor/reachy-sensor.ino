@@ -1311,10 +1311,10 @@ void loop() {
   // allowed/valid/br_ok/hr_ok flags tell the host why data is missing.
   if (now - emitTimers.bio >= host.bioMs) {
     emitTimers.bio = now;
-    // Require hysteresis confirmation before marking individual vitals as OK.
-    // This prevents emitting a single lucky reading as trustworthy.
-    bool br_emit_ok = vitals_allowed && br_valid && (presence.vitalsStreak >= VITALS_CONFIRM);
-    bool hr_emit_ok = vitals_allowed && hr_valid && (presence.vitalsStreak >= VITALS_CONFIRM);
+    // Emit values whenever they pass guard-rail checks (BR 4-30, HR 35-200).
+    // Streak gating (VITALS_CONFIRM) still controls RESTING_VITALS state.
+    bool br_emit_ok = vitals_allowed && br_valid;
+    bool hr_emit_ok = vitals_allowed && hr_valid;
     emitBio(t_ms, vitals_allowed, vitals_valid, br, br_emit_ok, hr, hr_emit_ok);
   }
 }
