@@ -381,57 +381,45 @@ class LocalStream:
                 return False
         return True
 
+    async def _run_async_session(self) -> None:
+        """Run the async session: personality routes, handler, record/play loops."""
+        loop = asyncio.get_running_loop()
+        self._asyncio_loop = loop  # type: ignore[assignment]
+        try:
+            if self._settings_app is not None:
+                mount_personality_routes(
+                    self._settings_app,
+                    self.handler,
+                    lambda: self._asyncio_loop,
+                    persist_personality=self._persist_personality,
+                    get_persisted_personality=self._read_persisted_personality,
+                )
+        except Exception:
+            logger.warning("Failed to mount personality routes", exc_info=True)
+        self._tasks = [
+            asyncio.create_task(self.handler.start_up(), name="openai-handler"),
+            asyncio.create_task(self.record_loop(), name="stream-record-loop"),
+            asyncio.create_task(self.play_loop(), name="stream-play-loop"),
+        ]
+        try:
+            await asyncio.gather(*self._tasks)
+        except asyncio.CancelledError:
+            logger.info("Tasks cancelled during shutdown")
+        finally:
+            await self.handler.shutdown()
+
     def launch(self) -> None:
-        """Start the recorder/player and run the async processing loops.
-
-        If the OpenAI key is missing, expose a tiny settings UI via the
-        Reachy Mini settings server to collect it before starting streams.
-        """
+        """Start the recorder/player and run the async processing loops."""
         self._stop_event.clear()
-
         self._load_instance_env()
-
         if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
             self._acquire_api_key_from_hf()
-
         if not self._wait_for_api_key():
             return
-
-        # Start media after key is set/available
         self._robot.media.start_recording()
         self._robot.media.start_playing()
-        time.sleep(1)  # give some time to the pipelines to start
-
-        async def runner() -> None:
-            # Capture loop for cross-thread personality actions
-            loop = asyncio.get_running_loop()
-            self._asyncio_loop = loop  # type: ignore[assignment]
-            # Mount personality routes now that loop and handler are available
-            try:
-                if self._settings_app is not None:
-                    mount_personality_routes(
-                        self._settings_app,
-                        self.handler,
-                        lambda: self._asyncio_loop,
-                        persist_personality=self._persist_personality,
-                        get_persisted_personality=self._read_persisted_personality,
-                    )
-            except Exception:
-                logger.warning("Failed to mount personality routes", exc_info=True)
-            self._tasks = [
-                asyncio.create_task(self.handler.start_up(), name="openai-handler"),
-                asyncio.create_task(self.record_loop(), name="stream-record-loop"),
-                asyncio.create_task(self.play_loop(), name="stream-play-loop"),
-            ]
-            try:
-                await asyncio.gather(*self._tasks)
-            except asyncio.CancelledError:
-                logger.info("Tasks cancelled during shutdown")
-            finally:
-                # Ensure handler connection is closed
-                await self.handler.shutdown()
-
-        asyncio.run(runner())
+        time.sleep(1)
+        asyncio.run(self._run_async_session())
 
     def close(self) -> None:
         """Stop the stream and underlying media pipelines.
