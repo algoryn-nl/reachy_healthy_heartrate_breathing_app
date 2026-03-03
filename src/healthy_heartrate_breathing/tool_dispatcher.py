@@ -343,6 +343,7 @@ class ToolDispatcher:
                 idle_mmwave_sweep_used = self._idle_policy.sweep_allowed(now)
                 idle_args["mode"] = "scan" if self._idle_policy.suggest_scan_only else "locate_and_measure"
                 idle_args["duration_s"] = self._idle_policy.probe_duration_s
+                idle_args["measure_duration_s"] = 15
                 idle_args["sweep_if_unseen"] = idle_mmwave_sweep_used
                 effective_args_json = json.dumps(idle_args)
                 if idle_mmwave_sweep_used:
@@ -455,6 +456,16 @@ class ToolDispatcher:
                 has_vitals = tool_result.get("status") == "ok"
                 state_changed = isinstance(ctx, dict) and ctx.get("changed", False)
                 idle_noteworthy = has_vitals or state_changed
+                logger.debug(
+                    "Idle probe decision: status=%s, has_vitals=%s, state_changed=%s, "
+                    "device_state=%s, previous=%s → noteworthy=%s",
+                    tool_result.get("status"),
+                    has_vitals,
+                    state_changed,
+                    ctx.get("state") if isinstance(ctx, dict) else None,
+                    ctx.get("previous_state") if isinstance(ctx, dict) else None,
+                    idle_noteworthy,
+                )
             if idle_noteworthy:
                 await self._create_response(
                     "The idle scan just returned noteworthy results. "
