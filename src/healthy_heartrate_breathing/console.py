@@ -322,6 +322,35 @@ class LocalStream:
 
         self._settings_initialized = True
 
+    def _load_instance_env(self) -> None:
+        """Load the instance ``.env`` file and update config (API key + profile)."""
+        if not self._instance_path:
+            return
+        try:
+            from dotenv import load_dotenv
+
+            from healthy_heartrate_breathing.config import set_custom_profile
+
+            env_path = Path(self._instance_path) / ".env"
+            if env_path.exists():
+                load_dotenv(dotenv_path=str(env_path), override=True)
+                # Update config with newly loaded values
+                new_key = os.getenv("OPENAI_API_KEY", "").strip()
+                if new_key:
+                    try:
+                        config.OPENAI_API_KEY = new_key
+                    except Exception:
+                        logger.warning("Failed to set config.OPENAI_API_KEY from instance .env", exc_info=True)
+                if LOCKED_PROFILE is None:
+                    new_profile = os.getenv("REACHY_MINI_CUSTOM_PROFILE")
+                    if new_profile is not None:
+                        try:
+                            set_custom_profile(new_profile.strip() or None)
+                        except Exception:
+                            logger.debug("Best-effort profile update from instance .env failed", exc_info=True)
+        except Exception:
+            logger.debug("Instance .env loading failed; continuing with defaults", exc_info=True)
+
     def launch(self) -> None:
         """Start the recorder/player and run the async processing loops.
 
@@ -330,32 +359,7 @@ class LocalStream:
         """
         self._stop_event.clear()
 
-        # Try to load an existing instance .env first (covers subsequent runs)
-        if self._instance_path:
-            try:
-                from dotenv import load_dotenv
-
-                from healthy_heartrate_breathing.config import set_custom_profile
-
-                env_path = Path(self._instance_path) / ".env"
-                if env_path.exists():
-                    load_dotenv(dotenv_path=str(env_path), override=True)
-                    # Update config with newly loaded values
-                    new_key = os.getenv("OPENAI_API_KEY", "").strip()
-                    if new_key:
-                        try:
-                            config.OPENAI_API_KEY = new_key
-                        except Exception:
-                            logger.warning("Failed to set config.OPENAI_API_KEY from instance .env", exc_info=True)
-                    if LOCKED_PROFILE is None:
-                        new_profile = os.getenv("REACHY_MINI_CUSTOM_PROFILE")
-                        if new_profile is not None:
-                            try:
-                                set_custom_profile(new_profile.strip() or None)
-                            except Exception:
-                                logger.debug("Best-effort profile update from instance .env failed", exc_info=True)
-            except Exception:
-                logger.debug("Instance .env loading failed; continuing with defaults", exc_info=True)
+        self._load_instance_env()
 
         # If key is still missing, try to download one from HuggingFace
         if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
