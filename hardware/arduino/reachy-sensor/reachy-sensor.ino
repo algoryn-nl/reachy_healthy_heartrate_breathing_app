@@ -244,7 +244,7 @@ static const uint8_t ABSENT_CONFIRM = 8;
 // VITALS_CONFIRM: number of consecutive frames where both heart rate AND
 //   breathing rate are valid before we transition to RESTING_VITALS and
 //   start emitting vitals to the host. Prevents reporting transient spikes.
-static const uint8_t VITALS_CONFIRM = 5;
+static const uint8_t VITALS_CONFIRM = 2;
 
 // HUMAN_STABLE_FALLBACK_CONFIRM: when the radar briefly loses target tracking
 //   (nTargets drops to 0) but still detects a human, this many consecutive
