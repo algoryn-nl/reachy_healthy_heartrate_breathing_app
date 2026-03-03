@@ -172,7 +172,10 @@ class CameraWorker:
                                 ]
 
                         # No face detected while tracking enabled - set face lost timestamp
-                        elif self.last_face_detected_time is None or abs(self.last_face_detected_time - current_time) < 1e-9:
+                        elif (
+                            self.last_face_detected_time is None
+                            or abs(self.last_face_detected_time - current_time) < 1e-9
+                        ):
                             # Only update if we haven't already set a face lost time
                             # (current_time check prevents overriding the disable-triggered timestamp)
                             pass

@@ -1162,19 +1162,6 @@ class TestShutdown:
 
         assert handler.connection is None
 
-    @pytest.mark.asyncio
-    async def test_flushes_light_orchestrator(self) -> None:
-        """shutdown() calls light_orchestrator.flush()."""
-        handler = _handler()
-        handler.connection = None
-
-        flush_mock = MagicMock()
-        handler.light_orchestrator.flush = flush_mock
-
-        await handler.shutdown()
-
-        flush_mock.assert_called_once()
-
 
 # ====================================================================
 # NEW: apply_personality() tests

@@ -128,25 +128,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             enabled=env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True),
             analytics_enabled=env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True),
             user_id=_light_user_id,
-            prefers_dim=env_flag("HEALTHY_LIGHT_PREFERS_DIM", False),
-            light_sensitive=env_flag("HEALTHY_LIGHT_SENSITIVE", False),
-            allow_wellness_nudges=env_flag("HEALTHY_LIGHT_ALLOW_WELLNESS_NUDGES", True),
-            day_start_hour=env_int("HEALTHY_LIGHT_DAY_START_HOUR", 7, min_value=0, max_value=23),
-            night_start_hour=env_int("HEALTHY_LIGHT_NIGHT_START_HOUR", 20, min_value=0, max_value=23),
             low_lux_threshold=env_float("HEALTHY_LIGHT_LOW_LUX_THRESHOLD", 40.0, min_value=0.0),
-            baseline_alpha=env_float("HEALTHY_LIGHT_BASELINE_ALPHA", 0.15, min_value=0.01, max_value=1.0),
-            baseline_min_samples=env_int("HEALTHY_LIGHT_BASELINE_MIN_SAMPLES", 5, min_value=1),
-            baseline_max_age_days=env_int("HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS", 90, min_value=1),
-            baseline_path=self._resolve_runtime_data_path("light_context_baseline.json"),
             analytics_path=self._resolve_runtime_data_path("light_context_analytics.db"),
             analytics_max_age_days=env_int("HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS", 90, min_value=1),
         )
         logger.info(
-            "Light-context policy: enabled=%s, analytics=%s, user_id=%s, baseline=%s",
+            "Proximity/occlusion policy: enabled=%s, analytics=%s, user_id=%s",
             self.light_orchestrator.enabled,
             self.light_orchestrator.analytics_enabled,
             self.light_orchestrator.user_id,
-            self.light_orchestrator.baseline_path,
         )
 
     def copy(self) -> "OpenaiRealtimeHandler":
@@ -564,9 +554,6 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         # Cancel any in-flight tool dispatch
         if hasattr(self, "_dispatcher"):
             await self._dispatcher.cancel()
-
-        # Flush any dirty light baseline to disk
-        self.light_orchestrator.flush()
 
         if self.connection:
             try:

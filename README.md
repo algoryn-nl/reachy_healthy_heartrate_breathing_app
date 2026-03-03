@@ -12,7 +12,7 @@ tags:
 
 # Healthy Heartrate Breathing
 
-A wellness-aware conversation app for the Reachy Mini robot. It uses an mmWave radar sensor for presence detection, heart rate, and breathing rate measurement, and an ambient light sensor (lux) to adapt conversation tone to the environment.
+A wellness-aware conversation app for the Reachy Mini robot. It uses an mmWave radar sensor for presence detection, heart rate, and breathing rate measurement, and a lux sensor for proximity/occlusion detection (the sensor sits behind the user — low lux means someone is close, not that the room is dark).
 
 Forked from the Reachy Mini conversation app. The original README is in `README_OLD.md`.
 
@@ -95,38 +95,31 @@ Full state diagram and transition details in `idle_policy.py` module docstring.
    - **Glob fallback**: Scan `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*` if VID/PID unavailable
    - **HELLO probe**: When multiple candidates exist, probe each with `CMD_PING` or DTR reset → `EVT_HELLO` handshake to confirm firmware
 
-### Ambient Light Context (`light_context` tool)
+### Proximity/Occlusion Context (`light_context` tool)
 
-The light context tool classifies the current ambient environment based on lux level, time of day, and user preferences. It outputs a `context_state` and `recommended_mode` that the conversation model uses to adapt its tone.
+The BH1750 lux sensor sits physically behind/below the person at the Reachy Mini robot. When someone sits down, their body occludes the sensor and lux drops dramatically. The `light_context` tool reframes lux as a **proximity/occlusion signal** that complements mmWave radar data.
 
 **Context states (in precedence order):**
 
 ```
 lux data available?
   No  --> neutral (lux_missing)
-  Yes --> sharp lux drop + active + presence?
-            Yes --> unexpected_darkening (quiet)
-            No  --> nighttime + low lux + presence?
-                      Yes --> night_wind_down (quiet)
-                      No  --> daytime + low lux + user prefers dim?
-                                Yes --> intentional_dim_work (balanced/quiet)
-                                No  --> daytime + low lux + prolonged duration?
-                                          Yes --> prolonged_low_light_strain_risk (quiet)
-                                          No  --> daytime + bright lux + presence?
-                                                    Yes --> bright_active (active)
-                                                    No  --> neutral
+  Yes --> sharp lux drop + presence?
+            Yes --> sudden_occlusion (engaged)
+            No  --> low lux + presence?
+                      Yes --> close_presence (engaged)
+                      No  --> moderate lux + presence?
+                                Yes --> partial_occlusion (balanced)
+                                No  --> clear_path (balanced)
 ```
-
-Order matters: a sharp lux drop at night is classified as `unexpected_darkening`, not `night_wind_down`. User preferences (`prefers_dim`, `light_sensitive`) prevent strain-risk nudges.
 
 **Lux thresholds (defaults):**
 
 | Threshold | Default | Env Variable |
 |---|---|---|
 | Low lux | 40 lux | `HEALTHY_LIGHT_LOW_LUX_THRESHOLD` |
-| Bright lux | 250 lux | `HEALTHY_LIGHT_BRIGHT_LUX_THRESHOLD` |
-| Sharp drop | 80 lux decrease in 60 s | `HEALTHY_LIGHT_SHARP_DROP_LUX` |
-| Prolonged low-light | 45 min | `HEALTHY_LIGHT_PROLONGED_MIN` |
+| Moderate lux | 120 lux | `HEALTHY_LIGHT_MODERATE_LUX_THRESHOLD` |
+| Sharp drop | 60 lux decrease in 60 s | `HEALTHY_LIGHT_SHARP_DROP_LUX` |
 
 **Lux source**: Can be passed directly via the `lux` parameter, or auto-extracted from an `mmwave_result` dict (path: `measure.latest_light.lux`).
 
@@ -153,11 +146,9 @@ All configuration is via environment variables. Key variables:
 |---|---|---|
 | `MMWAVE_SERIAL_PORT` | auto-detect | Serial port for mmWave sensor |
 | `HEALTHY_LIGHT_CONTEXT_ENABLED` | `true` | Enable/disable light context tool |
-| `HEALTHY_LIGHT_LOW_LUX_THRESHOLD` | `40` | Lux below this is "low" |
-| `HEALTHY_LIGHT_BRIGHT_LUX_THRESHOLD` | `250` | Lux above this is "bright" |
-| `HEALTHY_LIGHT_SHARP_DROP_LUX` | `80` | Lux drop in 60 s to trigger unexpected_darkening |
-| `HEALTHY_LIGHT_PROLONGED_MIN` | `45` | Minutes of low light before strain-risk nudge |
-| `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS` | `90` | Days before stale user baselines are pruned |
+| `HEALTHY_LIGHT_LOW_LUX_THRESHOLD` | `40` | Lux below this = close proximity |
+| `HEALTHY_LIGHT_MODERATE_LUX_THRESHOLD` | `120` | Lux below this = partial occlusion |
+| `HEALTHY_LIGHT_SHARP_DROP_LUX` | `60` | Lux drop in 60 s to trigger sudden_occlusion |
 | `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` | `90` | Days before old analytics rows are pruned |
 | `HEALTHY_DISABLED_TOOLS` | *(empty)* | Comma-separated tool names to disable |
 | `HEALTHY_TOOL_DISPATCH_TIMEOUT_S` | `30` | Max seconds per tool call before timeout |
@@ -169,7 +160,7 @@ Tools are loaded from the active profile's `tools.txt`. Each tool is a Python cl
 - `dance` / `stop_dance` -- expressive body movements
 - `play_emotion` / `stop_emotion` -- facial animations
 - `mmWave` -- radar sensor (see above)
-- `light_context` -- ambient light classification (see above)
+- `light_context` -- proximity/occlusion context (see above)
 - `sweep_look` -- rotate head to look around
 
 Custom tools can be added by creating a `.py` file in the profile folder that defines a `Tool` subclass.
@@ -185,7 +176,7 @@ src/healthy_heartrate_breathing/
   idle_policy.py            -- idle detection state machine, mmWave probe scheduling
   tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, sensor state extraction, and device_context enrichment
   transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
-  light_orchestrator.py     -- auto-invokes light context after mmWave lux data
+  light_orchestrator.py     -- lux delta tracking, auto light_context dispatch after mmWave
   tools/
     core_tools.py           -- Tool base class, registry, dispatcher
   profiles/
@@ -194,7 +185,7 @@ src/healthy_heartrate_breathing/
       tools.txt             -- enabled tools list
       mmWave.py             -- mmWave radar tool
       mmwave_protocol.py    -- binary protocol encoder/decoder
-      light_context.py      -- ambient light context classifier
+      light_context.py      -- proximity/occlusion context classifier
       sweep_look.py         -- head sweep tool
 ```
 

@@ -1,4 +1,4 @@
-"""Tests for the light_context classification logic."""
+"""Tests for the light_context proximity/occlusion classification logic."""
 # ruff: noqa: D103
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ async def test_disabled_returns_neutral(monkeypatch: pytest.MonkeyPatch) -> None
 async def test_enabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
     tool = LightContext()
-    result = await tool(_deps(), lux=100.0, local_hour=12)
+    result = await tool(_deps(), lux=100.0)
 
     assert result["enabled"] is True
 
@@ -58,145 +58,98 @@ async def test_missing_lux_returns_lux_missing(monkeypatch: pytest.MonkeyPatch) 
 
 
 # ---------------------------------------------------------------------------
-# Night wind-down
+# close_presence: low lux + presence
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_night_low_lux_returns_night_wind_down(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_low_lux_with_presence_returns_close_presence(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
     tool = LightContext()
     result = await tool(
         _deps(),
         lux=20.0,  # below default threshold of 40
-        local_hour=22,  # after default night_start_hour=20
         presence_detected=True,
     )
 
-    assert result["context_state"] == "night_wind_down"
-    assert result["recommended_mode"] == "quiet"
-    assert "night_low_lux" in result["reason_codes"]
+    assert result["context_state"] == "close_presence"
+    assert result["recommended_mode"] == "engaged"
+    assert "low_lux_with_presence" in result["reason_codes"]
+
+
+@pytest.mark.asyncio
+async def test_low_lux_without_presence_returns_clear_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
+    tool = LightContext()
+    result = await tool(
+        _deps(),
+        lux=20.0,  # low lux but no presence
+        presence_detected=False,
+    )
+
+    assert result["context_state"] == "clear_path"
+    assert "no_presence" in result["reason_codes"]
 
 
 # ---------------------------------------------------------------------------
-# Unexpected darkening (sharp drop)
+# sudden_occlusion: sharp lux drop + presence
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sharp_lux_drop_returns_unexpected_darkening(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sharp_drop_with_presence_returns_sudden_occlusion(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
     tool = LightContext()
     result = await tool(
         _deps(),
         lux=30.0,
-        lux_delta_60s=-100.0,  # exceeds default sharp_drop_lux=80
-        local_hour=14,
+        lux_delta_60s=-80.0,  # exceeds default sharp_drop_lux=60
         presence_detected=True,
-        active_interaction=True,
     )
 
-    assert result["context_state"] == "unexpected_darkening"
-    assert result["recommended_mode"] == "quiet"
+    assert result["context_state"] == "sudden_occlusion"
+    assert result["recommended_mode"] == "engaged"
     assert "sharp_lux_drop" in result["reason_codes"]
 
 
 # ---------------------------------------------------------------------------
-# Intentional dim work
+# partial_occlusion: moderate lux + presence
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_prefers_dim_returns_intentional_dim(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_moderate_lux_with_presence_returns_partial_occlusion(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
     tool = LightContext()
     result = await tool(
         _deps(),
-        lux=20.0,
-        local_hour=12,  # daytime
-        prefers_dim=True,
-    )
-
-    assert result["context_state"] == "intentional_dim_work"
-    assert "prefers_dim" in result["reason_codes"]
-    assert "intentional_dim" in result["reason_codes"]
-
-
-@pytest.mark.asyncio
-async def test_light_sensitive_returns_intentional_dim_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
-    tool = LightContext()
-    result = await tool(
-        _deps(),
-        lux=20.0,
-        local_hour=12,
-        light_sensitive=True,
-    )
-
-    assert result["context_state"] == "intentional_dim_work"
-    assert result["recommended_mode"] == "quiet"
-    assert "light_sensitive" in result["reason_codes"]
-
-
-# ---------------------------------------------------------------------------
-# Prolonged low light strain risk
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_prolonged_low_light_returns_strain_risk(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
-    tool = LightContext()
-    result = await tool(
-        _deps(),
-        lux=20.0,
-        local_hour=12,
-        allow_wellness_nudges=True,
-        low_light_duration_min=50.0,  # above default 45 min
-    )
-
-    assert result["context_state"] == "prolonged_low_light_strain_risk"
-    assert "prolonged_daytime_low_lux" in result["reason_codes"]
-
-
-# ---------------------------------------------------------------------------
-# Bright active
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_bright_daytime_returns_bright_active(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
-    tool = LightContext()
-    result = await tool(
-        _deps(),
-        lux=300.0,  # above default bright threshold of 250
-        local_hour=10,
+        lux=80.0,  # between 40 (low) and 120 (moderate)
         presence_detected=True,
     )
 
-    assert result["context_state"] == "bright_active"
-    assert result["recommended_mode"] == "active"
-    assert "bright_daytime" in result["reason_codes"]
+    assert result["context_state"] == "partial_occlusion"
+    assert result["recommended_mode"] == "balanced"
+    assert "moderate_lux_with_presence" in result["reason_codes"]
 
 
 # ---------------------------------------------------------------------------
-# Neutral conditions
+# clear_path: high lux or no presence
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_neutral_moderate_lux_returns_neutral(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_high_lux_returns_clear_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
     tool = LightContext()
     result = await tool(
         _deps(),
-        lux=100.0,  # between 40 (low) and 250 (bright)
-        local_hour=12,
+        lux=300.0,  # well above moderate threshold
+        presence_detected=True,
     )
 
-    assert result["context_state"] == "neutral"
-    assert "neutral_conditions" in result["reason_codes"]
+    assert result["context_state"] == "clear_path"
+    assert result["recommended_mode"] == "balanced"
+    assert "high_lux" in result["reason_codes"]
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +164,11 @@ async def test_lux_extracted_from_mmwave_result(monkeypatch: pytest.MonkeyPatch)
     result = await tool(
         _deps(),
         mmwave_result={"measure": {"latest_light": {"lux": 300.0}}},
-        local_hour=10,
         presence_detected=True,
     )
 
-    # Should have extracted lux=300 and classified as bright_active
-    assert result["context_state"] == "bright_active"
+    # Should have extracted lux=300 and classified as clear_path (high lux)
+    assert result["context_state"] == "clear_path"
     assert result["observations"]["lux"] == 300.0
 
 
@@ -234,27 +186,10 @@ async def test_zero_low_lux_threshold_respected(monkeypatch: pytest.MonkeyPatch)
         _deps(),
         lux=10.0,
         low_lux_threshold=0.0,
-        local_hour=12,
-    )
-    # With threshold=0.0, lux=10 is NOT low (10 > 0), so neutral
-    assert result["context_state"] == "neutral"
-    assert "neutral_conditions" in result["reason_codes"]
-
-
-@pytest.mark.asyncio
-async def test_zero_bright_lux_threshold_respected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Threshold of 0.0 must not silently become the default (250.0)."""
-    monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
-    tool = LightContext()
-    result = await tool(
-        _deps(),
-        lux=10.0,
-        bright_lux_threshold=0.0,
-        local_hour=10,
         presence_detected=True,
     )
-    # With threshold=0.0, lux=10 IS bright (10 >= 0), so bright_active
-    assert result["context_state"] == "bright_active"
+    # With threshold=0.0, lux=10 is NOT low (10 > 0), so partial_occlusion or clear_path
+    assert result["context_state"] != "close_presence"
 
 
 @pytest.mark.asyncio
@@ -267,26 +202,27 @@ async def test_zero_sharp_drop_threshold_respected(monkeypatch: pytest.MonkeyPat
         lux=100.0,
         lux_delta_60s=-1.0,
         sharp_drop_lux=0.0,
-        local_hour=12,
         presence_detected=True,
-        active_interaction=True,
     )
-    # With threshold=0.0, any negative delta triggers unexpected_darkening
-    assert result["context_state"] == "unexpected_darkening"
+    # With threshold=0.0, any negative delta triggers sudden_occlusion
+    assert result["context_state"] == "sudden_occlusion"
+
+
+# ---------------------------------------------------------------------------
+# Observations include new fields
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_zero_prolonged_min_threshold_respected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Threshold of 0.0 means immediate strain risk with any low-light duration."""
+async def test_observations_include_target_distance(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HEALTHY_LIGHT_CONTEXT_ENABLED", raising=False)
     tool = LightContext()
     result = await tool(
         _deps(),
         lux=20.0,
-        local_hour=12,
-        allow_wellness_nudges=True,
-        low_light_duration_min=0.0,
-        prolonged_low_light_min=0.0,
+        presence_detected=True,
+        target_distance_cm=45.0,
     )
-    # With threshold=0.0, duration=0 meets threshold, so strain_risk
-    assert result["context_state"] == "prolonged_low_light_strain_risk"
+
+    assert result["observations"]["target_distance_cm"] == 45.0
+    assert result["policy_version"] == "proximity_context_v1"

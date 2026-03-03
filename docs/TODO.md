@@ -6,6 +6,10 @@
 
 (nothing actively in-progress)
 
+### Done (recent)
+
+- [x] **PY-REFACTOR-1**: Reframe BH1750 lux sensor from ambient light to proximity/occlusion — rewrite `light_context.py` (new states: `clear_path`, `close_presence`, `sudden_occlusion`, `partial_occlusion`), simplify `light_orchestrator.py` (remove EMA baseline system, baseline persistence, time-of-day logic), update `openai_realtime.py` constructor, remove `flush()`, update instructions.txt and dashboard label, analytics schema v2 with `PRAGMA user_version` migration, remove 10 obsolete env vars, add `HEALTHY_LIGHT_MODERATE_LUX_THRESHOLD` (2026-03-03)
+
 ### Upcoming — Critical (before next release)
 
 - [x] **FW-CRIT-1**: Fix vitals hysteresis bypass in `emitBio()` — require `vitalsStreak >= VITALS_CONFIRM` in `br_emit_ok`/`hr_emit_ok` (`reachy-sensor.ino`) (2026-02-28)

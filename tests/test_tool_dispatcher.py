@@ -32,8 +32,7 @@ def _light_orchestrator(tmp_path) -> LightOrchestrator:
         enabled=False,
         analytics_enabled=False,
         user_id="test",
-        baseline_path=tmp_path / "baseline.json",
-        analytics_path=tmp_path / "analytics.jsonl",
+        analytics_path=tmp_path / "analytics.db",
     )
 
 
@@ -597,8 +596,7 @@ class TestAutoLightContextTimeout:
             enabled=True,
             analytics_enabled=False,
             user_id="test",
-            baseline_path=tmp_path / "baseline.json",
-            analytics_path=tmp_path / "analytics.jsonl",
+            analytics_path=tmp_path / "analytics.db",
         )
         d = _dispatcher(
             tmp_path,

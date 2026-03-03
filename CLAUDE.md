@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Healthy Heartrate Breathing (v0.2.2) is a conversational app for the **Reachy Mini** robot. It is forked from the Reachy Mini Conversation App and adds mmWave radar-based health sensing (heart rate, breathing rate), ambient light context, and wellness-oriented behavior.
+Healthy Heartrate Breathing (v0.2.2) is a conversational app for the **Reachy Mini** robot. It is forked from the Reachy Mini Conversation App and adds mmWave radar-based health sensing (heart rate, breathing rate), proximity/occlusion detection via lux sensor, and wellness-oriented behavior.
 
 The app connects an OpenAI Realtime API audio stream to robot motion, vision, and sensor tools via a profile-driven tool/prompt system. It is a Reachy Mini App (entry point registered via `project.entry-points.reachy_mini_apps` in pyproject.toml).
 
@@ -72,7 +72,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 | `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity; multi-target aware (backs off probing, suggests scan-only when >1 target) (state diagram in module docstring) |
 | `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()`; injects `device_context` dict into mmWave results via `build_device_context()` (vitals reliability, state transitions) |
 | `TranscriptHandler` | `transcript_handler.py` | Partial transcript debouncing (configurable delay) and completed transcript output routing |
-| `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data; owns baseline persistence and analytics |
+| `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data; owns lux delta tracking and analytics |
 
 ### Tool System
 
@@ -107,7 +107,7 @@ Profile-specific tools in `profiles/_healthy_heartrate_breathing_locked_profile/
 | Tool | File | Purpose |
 |------|------|---------|
 | `mmWave` | `mmWave.py` | Radar sensor: scan, measure, locate_and_measure modes |
-| `light_context` | `light_context.py` | Ambient light classification |
+| `light_context` | `light_context.py` | Proximity/occlusion context classifier |
 | `sweep_look` | `sweep_look.py` | Rotate head to widen scan field |
 | `custom_tool` | `custom_tool.py` | Template for creating new tools |
 
@@ -194,7 +194,7 @@ When running in headless mode with a settings app, these endpoints are mounted:
 
 The project includes a custom hardware component under `hardware/`.
 
-**Physical setup**: Seeed MR60BHA2 60GHz mmWave radar sensor + BH1750 ambient light sensor (I2C, address `0x23`), driven by an Arduino-compatible XIAO microcontroller. The sensors connect to the host (robot) over USB CDC serial at 115200 baud.
+**Physical setup**: Seeed MR60BHA2 60GHz mmWave radar sensor + BH1750 lux sensor (I2C, address `0x23`) used for proximity/occlusion detection, driven by an Arduino-compatible XIAO microcontroller. The sensors connect to the host (robot) over USB CDC serial at 115200 baud.
 
 **Firmware**: `hardware/arduino/reachy-sensor/reachy-sensor.ino`
 - Reads mmWave data (presence, targets, distance, heart rate, breathing rate) and lux values
@@ -230,20 +230,21 @@ The headless settings page (`static/index.html` + `static/main.js` + `static/sty
 - **Device state**: firmware person state (NO_TARGET, MOVING, STILL_NEAR, RESTING_VITALS, etc.)
 - **Target count**: number of detected targets, with truncation warning if >8 targets exceed the wire cap
 - **Heart rate / Breathing rate**: vitals when available (from `measure` or `locate_and_measure`)
-- **Ambient light**: lux reading from the BH1750 sensor
+- **Proximity (lux)**: lux reading from the BH1750 sensor (low lux = someone close)
 - **Disconnected state**: when the sensor returns errors, the chip shows "Disconnected" with an error banner; stale data (>120s) shows "Stale" chip
 - **Last scan mode and timestamp**
 
 Data flows: mmWave tool result (including errors) → `extract_sensor_state()` in `tool_dispatcher.py` → `handler.sensor_state` dict (replaced, not merged, to clear stale error keys) → `GET /sensor` REST endpoint in `console.py` → frontend polls every 3 seconds.
 
-### Light Context System
+### Light Context System (Proximity/Occlusion)
 
-`light_context.py` is a policy tool that classifies ambient light conditions:
+`light_context.py` is a policy tool that classifies proximity/occlusion context. The BH1750 lux sensor sits behind/below the person — when someone sits down, their body occludes the sensor and lux drops dramatically. This is reframed as a proximity signal, not an ambient light measurement.
+
 - Auto-invoked after mmWave returns lux data (orchestrated by `LightOrchestrator` via `ToolDispatcher._run_tool()`)
-- Maintains per-user rolling lux baseline (EMA per hour-of-day, persisted to JSON; stale entries pruned on load after `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS`, default 90)
-- Baseline saves throttled with dirty flag + configurable interval (default 60s); flushed at shutdown
+- States: `clear_path`, `close_presence`, `sudden_occlusion`, `partial_occlusion` (+ `neutral` when lux missing)
+- Lux delta tracking for sharp-drop detection (someone just sat down)
 - Outputs context state, recommended conversation mode, and action suggestions
-- SQLite analytics storage (when `HEALTHY_LIGHT_ANALYTICS_ENABLED` is true); time-based retention via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` (default 90)
+- SQLite analytics storage (when `HEALTHY_LIGHT_ANALYTICS_ENABLED` is true); time-based retention via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` (default 90); schema version 2 with `PRAGMA user_version` migration
 
 ### Key Dependencies
 
@@ -278,7 +279,7 @@ src/healthy_heartrate_breathing/
   idle_policy.py            -- idle detection state machine, mmWave probe scheduling
   tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, sensor state extraction, idle/light policy integration
   transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
-  light_orchestrator.py     -- lux baseline tracking (EMA per hour-of-day), auto light_context dispatch, analytics logging
+  light_orchestrator.py     -- lux delta tracking, auto light_context dispatch, proximity analytics logging
   console.py                -- LocalStream: headless bidirectional audio, settings UI, REST endpoints
   gradio_personality.py     -- PersonalityUI: Gradio components for profile management
   headless_personality.py   -- filesystem helpers for headless personality management
@@ -312,7 +313,7 @@ src/healthy_heartrate_breathing/
       tools.txt             -- enabled tools list
       mmWave.py             -- mmWave radar tool
       mmwave_protocol.py    -- binary protocol encoder/decoder (COBS, CRC-16)
-      light_context.py      -- ambient light context classifier
+      light_context.py      -- proximity/occlusion context classifier
       sweep_look.py         -- head sweep tool
       custom_tool.py        -- template for creating new tools
   static/
@@ -328,8 +329,8 @@ tests/
   test_env_utils.py         -- env_utils coercion and extraction tests
   test_external_loading.py  -- external tool/profile loading tests
   test_idle_policy.py       -- IdlePolicy state machine tests
-  test_light_context.py     -- light_context tool classification tests
-  test_light_orchestrator.py -- LightOrchestrator baseline tracking, dispatch, corrupted JSON / permission error handling
+  test_light_context.py     -- light_context proximity/occlusion classification tests
+  test_light_orchestrator.py -- LightOrchestrator lux delta, dispatch, analytics, schema migration tests
   test_mmwave.py            -- mmWave protocol, tool integration, bio rate boundary conditions, acceptance gate
   test_openai_realtime.py   -- OpenaiRealtimeHandler tests (receive, emit, idle, event loop, shutdown, personality, cost tracking)
   test_tool_dispatcher.py   -- ToolDispatcher dispatch, timeout, sensor extraction tests
@@ -400,26 +401,17 @@ Key configuration (see `.env.example`):
 | `HEALTHY_MM_WAVE_ERROR_BACKOFF_S` | `120.0` | Seconds to wait before retry after error suppression |
 | `HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER` | `2.0` | Probe interval multiplier when multi-target is active |
 
-### Light Context Policy
+### Light Context Policy (Proximity/Occlusion)
 
 | Variable | Default | Description |
 |---|---|---|
 | `HEALTHY_LIGHT_CONTEXT_ENABLED` | `true` | Enable/disable light context tool entirely |
 | `HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED` | `true` | Auto-invoke light context after mmWave |
-| `HEALTHY_LIGHT_ANALYTICS_ENABLED` | `true` | Enable JSONL analytics logging |
-| `HEALTHY_LIGHT_CONTEXT_USER_ID` | `default` | User ID for per-user baseline tracking |
-| `HEALTHY_LIGHT_PREFERS_DIM` | `false` | User preference: prefers dim environments |
-| `HEALTHY_LIGHT_SENSITIVE` | `false` | User preference: light sensitive |
-| `HEALTHY_LIGHT_ALLOW_WELLNESS_NUDGES` | `true` | Allow low-light strain-risk nudges |
-| `HEALTHY_LIGHT_DAY_START_HOUR` | `7` | Hour when daytime starts (0–23) |
-| `HEALTHY_LIGHT_NIGHT_START_HOUR` | `20` | Hour when nighttime starts (0–23) |
-| `HEALTHY_LIGHT_LOW_LUX_THRESHOLD` | `40.0` | Lux below this is "low" |
-| `HEALTHY_LIGHT_BRIGHT_LUX_THRESHOLD` | `250` | Lux above this is "bright" |
-| `HEALTHY_LIGHT_SHARP_DROP_LUX` | `80` | Lux drop in 60s to trigger unexpected_darkening |
-| `HEALTHY_LIGHT_PROLONGED_MIN` | `45` | Minutes of low light before strain-risk nudge |
-| `HEALTHY_LIGHT_BASELINE_ALPHA` | `0.15` | EMA smoothing factor for lux baseline |
-| `HEALTHY_LIGHT_BASELINE_MIN_SAMPLES` | `5` | Minimum samples before baseline is used |
-| `HEALTHY_LIGHT_BASELINE_MAX_AGE_DAYS` | `90` | Days before stale user baselines are pruned |
+| `HEALTHY_LIGHT_ANALYTICS_ENABLED` | `true` | Enable SQLite analytics logging |
+| `HEALTHY_LIGHT_CONTEXT_USER_ID` | `default` | User ID for analytics tracking |
+| `HEALTHY_LIGHT_LOW_LUX_THRESHOLD` | `40.0` | Lux below this = close proximity |
+| `HEALTHY_LIGHT_MODERATE_LUX_THRESHOLD` | `120.0` | Lux below this = partial occlusion |
+| `HEALTHY_LIGHT_SHARP_DROP_LUX` | `60` | Lux drop in 60s to trigger sudden_occlusion |
 | `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` | `90` | Days before old analytics rows are pruned |
 
 ### External Profiles/Tools
@@ -443,7 +435,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (402 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, LightOrchestrator file I/O error handling, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, and sweep_look error handling)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (375 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, and sweep_look error handling)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 
