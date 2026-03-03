@@ -729,8 +729,10 @@ class MmWave(Tool):
                 if mode in {"measure", "locate_and_measure"}:
                     if mode == "locate_and_measure":
                         latest = response["scan"].get("latest_target") if "scan" in response else None
-                        if latest is not None:
-                            effective_focus_cluster = int(latest.get("cluster", -1))
+                        if latest is None:
+                            response["status"] = "no_target"
+                            return response
+                        effective_focus_cluster = int(latest.get("cluster", -1))
 
                     measure_result = self._measure_sync(
                         ser,
