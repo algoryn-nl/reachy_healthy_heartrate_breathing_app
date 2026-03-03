@@ -351,6 +351,20 @@ class LocalStream:
         except Exception:
             logger.debug("Instance .env loading failed; continuing with defaults", exc_info=True)
 
+    def _acquire_api_key_from_hf(self) -> None:
+        """Attempt to download an OpenAI API key from HuggingFace as a fallback."""
+        logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
+        try:
+            from gradio_client import Client
+
+            client = Client("HuggingFaceM4/gradium_setup", verbose=False)
+            key, status = client.predict(api_name="/claim_b_key")
+            if key and key.strip():
+                logger.info("Successfully downloaded API key from HuggingFace")
+                self._persist_api_key(key)
+        except Exception as e:
+            logger.warning(f"Failed to download API key from HuggingFace: {e}")
+
     def launch(self) -> None:
         """Start the recorder/player and run the async processing loops.
 
@@ -361,20 +375,8 @@ class LocalStream:
 
         self._load_instance_env()
 
-        # If key is still missing, try to download one from HuggingFace
         if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
-            logger.info("OPENAI_API_KEY not set, attempting to download from HuggingFace...")
-            try:
-                from gradio_client import Client
-
-                client = Client("HuggingFaceM4/gradium_setup", verbose=False)
-                key, status = client.predict(api_name="/claim_b_key")
-                if key and key.strip():
-                    logger.info("Successfully downloaded API key from HuggingFace")
-                    # Persist it immediately
-                    self._persist_api_key(key)
-            except Exception as e:
-                logger.warning(f"Failed to download API key from HuggingFace: {e}")
+            self._acquire_api_key_from_hf()
 
         # Always expose settings UI if a settings app is available
         # (do this AFTER loading/downloading the key so status endpoint sees the right value)
