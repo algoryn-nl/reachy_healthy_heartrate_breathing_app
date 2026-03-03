@@ -126,12 +126,24 @@ class TestIdleDispatch:
         assert actual_args["duration_s"] == 5.0
 
     @pytest.mark.asyncio
-    async def test_idle_does_not_create_response(self, tmp_path) -> None:
+    async def test_idle_silent_when_unremarkable(self, tmp_path) -> None:
         create_resp = AsyncMock()
-        d = _dispatcher(tmp_path, create_response=create_resp)
+        # No vitals, no state change → should stay silent
+        dispatch = AsyncMock(return_value={"status": "measure_inconclusive", "scan": {"latest_target": None}})
+        d = _dispatcher(tmp_path, create_response=create_resp, dispatch_tool=dispatch)
 
         await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=True)
         create_resp.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_idle_speaks_when_noteworthy(self, tmp_path) -> None:
+        create_resp = AsyncMock()
+        # status="ok" means vitals were captured → noteworthy
+        dispatch = AsyncMock(return_value={"status": "ok", "scan": {"latest_target": {"x": 1.0}}})
+        d = _dispatcher(tmp_path, create_response=create_resp, dispatch_tool=dispatch)
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="call-1", is_idle=True)
+        create_resp.assert_called_once()
 
 
 class TestIdlePolicyIntegration:

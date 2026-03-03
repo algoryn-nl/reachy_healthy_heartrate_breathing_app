@@ -446,9 +446,21 @@ class ToolDispatcher:
         if tool_name == "camera" and "b64_im" in tool_result:
             await self._handle_camera_result(tool_result)
 
-        # Create response for non-idle calls
+        # Create response: always speak for user-initiated calls;
+        # for idle probes, speak when something noteworthy happened.
         if is_idle:
-            pass  # no speech response for idle
+            idle_noteworthy = False
+            if tool_name == "mmWave" and isinstance(tool_result, dict):
+                ctx = tool_result.get("device_context")
+                has_vitals = tool_result.get("status") == "ok"
+                state_changed = isinstance(ctx, dict) and ctx.get("changed", False)
+                idle_noteworthy = has_vitals or state_changed
+            if idle_noteworthy:
+                await self._create_response(
+                    "The idle scan just returned noteworthy results. "
+                    "Briefly comment on what you observed — state changes, "
+                    "vitals, or who arrived/left. Keep it to one or two sentences.",
+                )
         else:
             await self._create_response(
                 "Use the tool result just returned and answer concisely in speech.",

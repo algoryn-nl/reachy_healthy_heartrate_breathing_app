@@ -678,9 +678,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 "Do one calm wellness scan cycle."
             )
             idle_instructions = (
-                "You MUST respond with function calls only - no speech or text. "
-                f"Call mmWave exactly once with mode='{idle_mode}', duration_s={self.idle_policy.probe_duration_s}, "
-                f"{'sweep_if_unseen=' + sweep_flag + '. ' if not scan_only else ''}Then stop. "
+                f"Call mmWave exactly once with mode='{idle_mode}', duration_s={self.idle_policy.probe_duration_s}"
+                f"{', sweep_if_unseen=' + sweep_flag if not scan_only else ''}. "
                 f"Current strategy: {strategy}. "
                 "Do not call dance, play_emotion, or sweep_look for this idle cycle."
             )
