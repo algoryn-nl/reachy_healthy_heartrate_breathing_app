@@ -365,6 +365,22 @@ class LocalStream:
         except Exception as e:
             logger.warning(f"Failed to download API key from HuggingFace: {e}")
 
+    def _wait_for_api_key(self) -> bool:
+        """Mount settings UI and block until API key is available.
+
+        Returns ``True`` if the key is available (immediately or after waiting),
+        ``False`` if interrupted.
+        """
+        self._init_settings_ui_if_needed()
+        if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
+            logger.warning("OPENAI_API_KEY not found. Open the app settings page to enter it.")
+            try:
+                self._api_key_event.wait()
+            except KeyboardInterrupt:
+                logger.info("Interrupted while waiting for API key.")
+                return False
+        return True
+
     def launch(self) -> None:
         """Start the recorder/player and run the async processing loops.
 
@@ -378,18 +394,8 @@ class LocalStream:
         if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
             self._acquire_api_key_from_hf()
 
-        # Always expose settings UI if a settings app is available
-        # (do this AFTER loading/downloading the key so status endpoint sees the right value)
-        self._init_settings_ui_if_needed()
-
-        # If key is still missing -> wait until provided via the settings UI
-        if not (config.OPENAI_API_KEY and str(config.OPENAI_API_KEY).strip()):
-            logger.warning("OPENAI_API_KEY not found. Open the app settings page to enter it.")
-            try:
-                self._api_key_event.wait()
-            except KeyboardInterrupt:
-                logger.info("Interrupted while waiting for API key.")
-                return
+        if not self._wait_for_api_key():
+            return
 
         # Start media after key is set/available
         self._robot.media.start_recording()
