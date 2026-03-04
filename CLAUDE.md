@@ -85,6 +85,7 @@ Tools are the primary extension point. The system is in `tools/core_tools.py`:
 - **Profile-driven loading**: `tools.txt` in the active profile lists enabled tools by name
 - **Resolution order**: profile folder first, then `tools/` (core), then external directory
 - **Dispatch**: `dispatch_tool_call(name, args_json, deps)` looks up and calls the tool
+- **Return helpers**: `tool_ok(status, **extra)` / `tool_error(message, **extra)` — standardized return dict builders; errors always have `"error"` key, successes always have `"status"` key
 - **Disabled tools**: `HEALTHY_DISABLED_TOOLS` env var disables tools by name at runtime
 - **Validation**: post-registration check warns if `tools.txt` requests tools that didn't register a `Tool` subclass
 - **Errors**: `ToolRegistryError` (not `sys.exit`) on fatal init failures

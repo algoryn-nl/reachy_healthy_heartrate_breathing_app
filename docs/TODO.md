@@ -42,7 +42,7 @@
 - [x] **PY-MED-7**: Decompose launch() into smaller methods in console.py — extracted _load_instance_env(), _acquire_api_key_from_hf(), _wait_for_api_key(), _run_async_session() (2026-03-03)
 - [x] **PY-MED-8**: Migrate analytics from JSONL to SQLite in `light_orchestrator.py` — `_init_analytics_db()` creates WAL-mode DB with flattened `light_events` table; time-based retention via `_prune_analytics()` (configurable via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS`, default 90 days); lazy DB init on first write; 8 tests (2026-03-01)
 - [x] **PY-MED-9**: Platform-aware serial port glob ordering in mmWave `_resolve_serial_port()` — `sys.platform`-conditional patterns: macOS gets `cu.usbmodem`/`tty.usbmodem`, Linux gets `ttyACM`/`ttyUSB` (2026-03-01)
-- [ ] **PY-MED-10**: Standardize tool error handling — error dicts for tools, exceptions for libraries, no `sys.exit()` outside `main()`
+- [x] **PY-MED-10**: Standardize tool error handling — `tool_ok()`/`tool_error()` helpers in `core_tools.py`; all 13 tool files migrated; error dicts always have `"error"` key, success dicts always have `"status"` key (2026-03-04)
 - [x] **FW-MED-1**: Add BH1750 periodic re-init on failure — retry `begin()` every 10s when `!lightSensorReady` (`reachy-sensor.ino`) (2026-03-01)
 - [x] **FW-MED-2**: Encapsulate firmware globals into 6 structs — `VitalsCache`, `PresenceState`, `EmitTimers`, `DiagCounters`, `HostSettings`, `PrevState` (`reachy-sensor.ino`) (2026-03-01)
 - [x] **FW-MED-3**: Document buffer sizing rationale; add `static_assert` for `txPayloadBuf` vs `MAX_TARGETS_WIRE` (`reachy-sensor.ino`) (2026-03-01)
@@ -132,7 +132,7 @@
 - ~~**Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere.~~ (fixed: removed redundant `or DEFAULT` fallbacks — thresholds already resolved via `coerce_float()` with defaults; audited codebase, no other instances; 4 regression tests; 2026-02-28)
 - **Thread safety gaps**: ~~Tool registry globals unprotected~~ (fixed: `_REGISTRY_LOCK` with double-checked locking, 2026-03-01); camera_worker state transitions unsynchronized. ~~MovementManager start/stop~~ (fixed: `_lifecycle_lock`, 2026-03-01). ~~HeadWobbler generation TOCTOU~~ (fixed: consolidated lock hold + generation guard inside `_sway_lock`, 2026-03-01). Priority: high.
 - ~~**Firmware vitals logic bugs**: Hysteresis bypass in emitBio, stale vitals in fallback lock, dist_ok race condition.~~ (fixed: 2026-02-28)
-- **Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase. Priority: medium.
+- ~~**Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase.~~ (fixed: `tool_ok()`/`tool_error()` helpers standardize all tool returns; `sys.exit()` only in `main.py`; 2026-03-04)
 - **Config singleton at import time**: `config = Config()` in `config.py` module body. Import-time failure cascades to all dependents. Priority: medium.
 
 #### Resolved
