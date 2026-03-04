@@ -154,6 +154,9 @@ static const uint8_t FLAG_TARGETS_TRUNCATED = 1 << 1;  // more targets exist tha
 // The radar can see more, but we cap the wire payload to keep packets small.
 static const uint8_t MAX_TARGETS_WIRE = 8;
 
+// --- COBS framing ---
+static const uint8_t FRAME_DELIMITER = 0x00;  // marks end of every COBS frame on the wire
+
 // --- EVT_HELLO feature bits ---
 // The HELLO message advertises which optional hardware is available.
 // The host can use these bits to decide which telemetry to expect.
@@ -604,7 +607,7 @@ static void sendFrame(uint8_t msgType, const uint8_t* payload, size_t payloadLen
   if (encodedLen == 0) { diag.txDrops++; return; }
 
   Serial.write(txEncodedBuf, encodedLen);
-  Serial.write((uint8_t)0x00);
+  Serial.write(FRAME_DELIMITER);
 }
 
 // ============================================================================
@@ -1007,7 +1010,7 @@ static void pollHostUsbSerial() {
     if (byteRead < 0) break;
     uint8_t byte = (uint8_t)byteRead;
 
-    if (byte == 0x00) {
+    if (byte == FRAME_DELIMITER) {
       if (rxOverflow) {
         rxOverflow = false;
         rxEncodedLen = 0;

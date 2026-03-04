@@ -56,7 +56,7 @@
 - [x] **PY-LOW-3**: Clean up `sys.modules` on `exec_module()` failure in `_load_module_from_file()` — try/except + pop on error; 2 tests (2026-03-01)
 - [x] **PY-LOW-4**: Add error handling + named constants to `sweep_look.py` — `SWEEP_MAX_ANGLE_RAD`, `SWEEP_TRANSITION_S`, `SWEEP_HOLD_S`; try/except returns error dict; docstring documents angle difference from mmWave; 3 tests (2026-03-01)
 - [x] **PY-LOW-5**: Consolidate personality REST save endpoints — redundant GET variant removed with PY-MED-1 (2026-03-01)
-- [ ] **FW-LOW-1**: Replace `0x00` magic literal with `FRAME_DELIMITER` named constant
+- [x] **FW-LOW-1**: Replace `0x00` magic literal with `FRAME_DELIMITER` named constant (2026-03-04)
 - [ ] **FW-LOW-2**: Add firmware unit test harness for state machine, COBS codec, and CRC
 
 ### Upcoming — Test Coverage Gaps
