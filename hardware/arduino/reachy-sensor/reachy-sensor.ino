@@ -72,6 +72,24 @@
 #include <BH1750.h>
 
 #include "Seeed_Arduino_mmWave.h"
+#include "reachy_codec.h"
+
+// --- Aliases: map .ino names to reachy_codec.h rc_* functions ---
+#define isFinitePositive  rc_is_finite_positive
+#define crc16CcittFalse   rc_crc16_ccitt_false
+#define cobsEncode        rc_cobs_encode
+#define cobsDecode        rc_cobs_decode
+#define appendU8          rc_append_u8
+#define appendU16LE       rc_append_u16le
+#define appendI16LE       rc_append_i16le
+#define appendU32LE       rc_append_u32le
+#define appendI32LE       rc_append_i32le
+#define appendF32LE       rc_append_f32le
+#define readU16LE         rc_read_u16le
+#define readI16LE         rc_read_i16le
+#define toI16Scaled       rc_to_i16_scaled
+#define toU16ScaledOrNull rc_to_u16_scaled_or_null
+#define FRAME_DELIMITER   RC_FRAME_DELIMITER
 
 // --- Platform-specific UART setup ---
 // The mmWave sensor communicates over a hardware UART. On ESP32 boards this
@@ -153,9 +171,6 @@ static const uint8_t FLAG_TARGETS_TRUNCATED = 1 << 1;  // more targets exist tha
 // Maximum number of individual targets sent per EVT_TARGETS packet.
 // The radar can see more, but we cap the wire payload to keep packets small.
 static const uint8_t MAX_TARGETS_WIRE = 8;
-
-// --- COBS framing ---
-static const uint8_t FRAME_DELIMITER = 0x00;  // marks end of every COBS frame on the wire
 
 // --- EVT_HELLO feature bits ---
 // The HELLO message advertises which optional hardware is available.
@@ -389,9 +404,6 @@ static_assert(
 // Small helpers
 // ============================================================================
 
-// Returns true if v is a real positive number (not NaN, not Inf, not zero/negative).
-static bool isFinitePositive(float v) { return isfinite(v) && v > 0.0f; }
-
 // Sitting/standing heuristic with hysteresis to prevent flicker.
 // Uses prev.p to hold the current pose inside the dead zone (50–60 cm).
 // Returns UNKNOWN if there's no target or the distance is invalid.
@@ -401,176 +413,6 @@ static PoseGuess guessPose(PersonState s, float dist_cm) {
   if (dist_cm < SIT_STAND_LOWER_CM) return PoseGuess::SITTING;
   // Inside dead zone: hold previous pose, default to SITTING if unknown
   return (prev.p == PoseGuess::STANDING) ? PoseGuess::STANDING : PoseGuess::SITTING;
-}
-
-// CRC-16/CCITT-FALSE: the checksum algorithm used for packet integrity.
-// Poly=0x1021, Init=0xFFFF, no reflection, no final XOR.
-// Must match the host-side implementation (Python: mmwave_protocol.py).
-static uint16_t crc16CcittFalse(const uint8_t* data, size_t len) {
-  uint16_t crc = 0xFFFF;
-  for (size_t i = 0; i < len; i++) {
-    crc ^= (uint16_t)data[i] << 8;
-    for (uint8_t bit = 0; bit < 8; bit++) {
-      if (crc & 0x8000) {
-        crc = (uint16_t)((crc << 1) ^ 0x1021);
-      } else {
-        crc = (uint16_t)(crc << 1);
-      }
-    }
-  }
-  return crc;
-}
-
-// ============================================================================
-// Buffer serialization helpers (little-endian)
-// ============================================================================
-// These write typed values into a byte buffer at the current index (*idx)
-// and advance the index. Used to build packet payloads field by field.
-
-static void appendU8(uint8_t* buf, size_t* idx, uint8_t value) { buf[(*idx)++] = value; }
-
-static void appendU16LE(uint8_t* buf, size_t* idx, uint16_t value) {
-  buf[(*idx)++] = (uint8_t)(value & 0xFF);
-  buf[(*idx)++] = (uint8_t)((value >> 8) & 0xFF);
-}
-
-static void appendI16LE(uint8_t* buf, size_t* idx, int16_t value) {
-  appendU16LE(buf, idx, (uint16_t)value);
-}
-
-static void appendU32LE(uint8_t* buf, size_t* idx, uint32_t value) {
-  buf[(*idx)++] = (uint8_t)(value & 0xFF);
-  buf[(*idx)++] = (uint8_t)((value >> 8) & 0xFF);
-  buf[(*idx)++] = (uint8_t)((value >> 16) & 0xFF);
-  buf[(*idx)++] = (uint8_t)((value >> 24) & 0xFF);
-}
-
-static void appendI32LE(uint8_t* buf, size_t* idx, int32_t value) {
-  appendU32LE(buf, idx, (uint32_t)value);
-}
-
-// Write a 32-bit float as its raw IEEE-754 bytes (little-endian).
-static void appendF32LE(uint8_t* buf, size_t* idx, float value) {
-  uint32_t raw = 0;
-  memcpy(&raw, &value, sizeof(raw));
-  appendU32LE(buf, idx, raw);
-}
-
-// Read helpers for parsing incoming host commands.
-static uint16_t readU16LE(const uint8_t* buf) {
-  return (uint16_t)buf[0] | ((uint16_t)buf[1] << 8);
-}
-
-static int16_t readI16LE(const uint8_t* buf) {
-  return (int16_t)readU16LE(buf);
-}
-
-// ============================================================================
-// COBS codec (Consistent Overhead Byte Stuffing)
-// ============================================================================
-// COBS eliminates 0x00 bytes from the data so that 0x00 can be used as an
-// unambiguous frame delimiter. Overhead is at most 1 byte per 254 input bytes.
-//
-// Wire format:  [COBS-encoded payload bytes] [0x00 delimiter]
-//
-// The host and device both use this same encoding. The Python counterpart
-// is in mmwave_protocol.py.
-
-// Encode `input` (may contain 0x00 bytes) into `output` (no 0x00 bytes).
-// Returns the encoded length, or 0 on overflow.
-static size_t cobsEncode(const uint8_t* input, size_t inputLen, uint8_t* output, size_t outputCap) {
-  if (outputCap == 0) return 0;
-
-  size_t readIdx = 0;
-  size_t writeIdx = 1;
-  size_t codeIdx = 0;
-  uint8_t code = 1;
-  output[0] = 0;
-
-  while (readIdx < inputLen) {
-    uint8_t byte = input[readIdx++];
-    if (byte == 0) {
-      if (codeIdx >= outputCap) return 0;
-      output[codeIdx] = code;
-      code = 1;
-      codeIdx = writeIdx++;
-      if (codeIdx >= outputCap) return 0;
-      continue;
-    }
-
-    if (writeIdx >= outputCap) return 0;
-    output[writeIdx++] = byte;
-    code++;
-    if (code == 0xFF) {
-      if (codeIdx >= outputCap) return 0;
-      output[codeIdx] = code;
-      code = 1;
-      codeIdx = writeIdx++;
-      if (codeIdx >= outputCap) return 0;
-    }
-  }
-
-  if (codeIdx >= outputCap) return 0;
-  output[codeIdx] = code;
-  return writeIdx;
-}
-
-// Decode COBS-encoded `input` back into original data (with 0x00 bytes restored).
-// Returns true on success, false on malformed input or overflow.
-static bool cobsDecode(const uint8_t* input, size_t inputLen, uint8_t* output, size_t* outLen, size_t outputCap) {
-  if (inputLen == 0) return false;
-
-  size_t readIdx = 0;
-  size_t writeIdx = 0;
-
-  while (readIdx < inputLen) {
-    uint8_t code = input[readIdx++];
-    if (code == 0) return false;
-
-    size_t next = readIdx + (size_t)code - 1;
-    if (next > inputLen) return false;
-
-    while (readIdx < next) {
-      if (writeIdx >= outputCap) return false;
-      output[writeIdx++] = input[readIdx++];
-    }
-
-    if (code < 0xFF && readIdx < inputLen) {
-      if (writeIdx >= outputCap) return false;
-      output[writeIdx++] = 0;
-    }
-  }
-
-  *outLen = writeIdx;
-  return true;
-}
-
-// ============================================================================
-// Numeric scaling for wire format
-// ============================================================================
-// The protocol sends most values as scaled integers to save bandwidth.
-// For example, a distance of 1.234 m is sent as 1234 mm (i16, scale=1000).
-// NaN/Inf values are mapped to sentinel values (0 or 0xFFFF) so the host
-// can distinguish "no data" from "zero".
-
-// Scale a float to a signed 16-bit integer, clamping to [-32768, 32767].
-// NaN/Inf maps to 0 (not a sentinel — use toU16ScaledOrNull for nullable fields).
-static int16_t toI16Scaled(float value, float scale) {
-  if (!isfinite(value)) return 0;
-  float scaled = value * scale;
-  if (scaled > 32767.0f) scaled = 32767.0f;
-  if (scaled < -32768.0f) scaled = -32768.0f;
-  return (int16_t)lroundf(scaled);
-}
-
-// Scale a float to an unsigned 16-bit integer, clamping to [0, 65534].
-// NaN/Inf maps to 0xFFFF (the null sentinel). The host interprets 0xFFFF as "no data".
-static uint16_t toU16ScaledOrNull(float value, float scale) {
-  if (!isfinite(value)) return 0xFFFF;
-  float scaled = value * scale;
-  if (scaled < 0.0f) scaled = 0.0f;
-  if (scaled > 65534.0f) scaled = 65534.0f;
-  return (uint16_t)lroundf(scaled);
 }
 
 // ============================================================================

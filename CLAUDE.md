@@ -197,7 +197,7 @@ The project includes a custom hardware component under `hardware/`.
 
 **Physical setup**: Seeed MR60BHA2 60GHz mmWave radar sensor + BH1750 lux sensor (I2C, address `0x23`) used for proximity/occlusion detection, driven by an Arduino-compatible XIAO microcontroller. The sensors connect to the host (robot) over USB CDC serial at 115200 baud.
 
-**Firmware**: `hardware/arduino/reachy-sensor/reachy-sensor.ino`
+**Firmware**: `hardware/arduino/reachy-sensor/reachy-sensor.ino` (includes `reachy_codec.h`)
 - Reads mmWave data (presence, targets, distance, heart rate, breathing rate) and lux values
 - Implements a state machine with person states: `NO_TARGET`, `MULTI_TARGET`, `PRESENT_FAR`, `MOVING`, `STILL_NEAR`, `RESTING_VITALS`
 - Vitals gating: heart/breath rates only reported when single-target, still, not head-moving, within near zone (35–150cm)
@@ -343,7 +343,11 @@ hardware/
   README.md                 -- binary protocol specification
   arduino/
     reachy-sensor/          -- firmware source (.ino)
+      reachy_codec.h        -- header-only pure functions (COBS, CRC, serialization, scaling)
     lib/                    -- Seeed mmWave library (git submodule)
+  tests/
+    reachy_codec_shim.c     -- ctypes shim exporting reachy_codec.h functions
+    Makefile                -- builds libreachy_codec shared library
   tools/
     mmwave_decode.py        -- CLI decode utility for serial/capture files
 
@@ -436,7 +440,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (375 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, and sweep_look error handling)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (418 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, and firmware codec cross-validation via ctypes)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 
