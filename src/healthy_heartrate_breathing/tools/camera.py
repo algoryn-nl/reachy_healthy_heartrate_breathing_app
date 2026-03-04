@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 import cv2
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_error
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class Camera(Tool):
         image_query = (kwargs.get("question") or "").strip()
         if not image_query:
             logger.warning("camera: empty question")
-            return {"error": "question must be a non-empty string"}
+            return tool_error("question must be a non-empty string")
 
         logger.info("Tool call: camera question=%s", image_query[:120])
 
@@ -41,10 +41,10 @@ class Camera(Tool):
             frame = deps.camera_worker.get_latest_frame()
             if frame is None:
                 logger.error("No frame available from camera worker")
-                return {"error": "No frame available"}
+                return tool_error("No frame available")
         else:
             logger.error("Camera worker not available")
-            return {"error": "Camera worker not available"}
+            return tool_error("Camera worker not available")
 
         # Use vision manager for processing if available
         if deps.vision_manager is not None:
@@ -58,7 +58,7 @@ class Camera(Tool):
             return (
                 {"image_description": vision_result}
                 if isinstance(vision_result, str)
-                else {"error": "vision returned non-string"}
+                else tool_error("vision returned non-string")
             )
 
         # Encode image directly to JPEG bytes without writing to file

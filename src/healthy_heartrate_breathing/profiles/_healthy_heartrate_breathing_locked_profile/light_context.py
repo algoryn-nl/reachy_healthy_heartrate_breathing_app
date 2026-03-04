@@ -16,7 +16,7 @@ from healthy_heartrate_breathing.env_utils import (
     coerce_float,
     extract_lux_from_mmwave_result,
 )
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok
 
 
 logger = logging.getLogger(__name__)
@@ -66,17 +66,17 @@ class LightContext(Tool):
         del deps  # no hardware control needed
 
         if not env_flag("HEALTHY_LIGHT_CONTEXT_ENABLED", True):
-            return {
-                "enabled": False,
-                "status": "disabled",
-                "context_state": "neutral",
-                "recommended_mode": "balanced",
-                "recommended_actions": ["standard_conversation_policy"],
-                "confidence": 0.0,
-                "cooldown_hint_s": 120,
-                "reason_codes": ["tool_disabled"],
-                "reason": "HEALTHY_LIGHT_CONTEXT_ENABLED=false",
-            }
+            return tool_ok(
+                "disabled",
+                enabled=False,
+                context_state="neutral",
+                recommended_mode="balanced",
+                recommended_actions=["standard_conversation_policy"],
+                confidence=0.0,
+                cooldown_hint_s=120,
+                reason_codes=["tool_disabled"],
+                reason="HEALTHY_LIGHT_CONTEXT_ENABLED=false",
+            )
 
         low_lux_threshold = coerce_float(
             kwargs.get("low_lux_threshold"),
@@ -178,19 +178,20 @@ class LightContext(Tool):
                 else:
                     reason_codes.append("high_lux")
 
-        return {
-            "enabled": True,
-            "policy_version": "proximity_context_v1",
-            "context_state": context_state,
-            "recommended_mode": recommended_mode,
-            "recommended_actions": recommended_actions,
-            "confidence": round(confidence, 2),
-            "cooldown_hint_s": cooldown_hint_s,
-            "reason_codes": reason_codes,
-            "observations": {
+        return tool_ok(
+            context_state,
+            enabled=True,
+            context_state=context_state,
+            policy_version="proximity_context_v1",
+            recommended_mode=recommended_mode,
+            recommended_actions=recommended_actions,
+            confidence=round(confidence, 2),
+            cooldown_hint_s=cooldown_hint_s,
+            reason_codes=reason_codes,
+            observations={
                 "lux": lux,
                 "lux_delta_60s": lux_delta_60s,
                 "presence_detected": presence_detected,
                 "target_distance_cm": target_distance_cm,
             },
-        }
+        )

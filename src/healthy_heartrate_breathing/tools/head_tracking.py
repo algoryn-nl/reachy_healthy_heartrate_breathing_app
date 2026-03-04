@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok
 
 
 logger = logging.getLogger(__name__)
@@ -28,4 +28,4 @@ class HeadTracking(Tool):
 
         status = "started" if enable else "stopped"
         logger.info("Tool call: head_tracking %s", status)
-        return {"status": f"head tracking {status}"}
+        return tool_ok(f"head tracking {status}")

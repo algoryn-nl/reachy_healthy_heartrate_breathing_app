@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from reachy_mini.utils import create_head_pose
 from healthy_heartrate_breathing.env_utils import coerce_ms, coerce_int, coerce_float_nonneg
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_error
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
     CMD_PING,
@@ -644,18 +644,18 @@ class MmWave(Tool):
         """Execute mmWave scan/measure orchestration."""
         mode = kwargs.get("mode", "locate_and_measure")
         if mode not in {"scan", "measure", "locate_and_measure"}:
-            return {"error": f"invalid mode '{mode}', use scan, measure, or locate_and_measure"}
+            return tool_error(f"invalid mode '{mode}', use scan, measure, or locate_and_measure")
 
         try:
             serial_port = self._resolve_serial_port(kwargs.get("serial_port"))
         except RuntimeError as e:
             logger.warning("mmWave port resolution failed: %s", e)
-            return {"error": str(e), "status": "disconnected"}
+            return tool_error(str(e), status="disconnected")
         try:
             import serial
             import serial.serialutil
         except ModuleNotFoundError as exc:
-            return {"error": f"missing dependency: {exc.name or 'pyserial'}"}
+            return tool_error(f"missing dependency: {exc.name or 'pyserial'}")
 
         duration_s = float(coerce_float_nonneg(kwargs.get("duration_s", 0), 0.0))
         if mode == "locate_and_measure":
@@ -695,11 +695,7 @@ class MmWave(Tool):
                 handshake_err = self._handshake_version(ser, tx_state, rx_buffer)
                 if handshake_err is not None:
                     logger.warning("mmWave handshake failed on %s: %s", serial_port, handshake_err)
-                    return {
-                        "error": handshake_err,
-                        "serial_port": serial_port,
-                        "status": "version_mismatch",
-                    }
+                    return tool_error(handshake_err, serial_port=serial_port, status="version_mismatch")
 
                 response: Dict[str, Any] = {
                     "serial_port": serial_port,
@@ -754,10 +750,10 @@ class MmWave(Tool):
             return await asyncio.to_thread(run_session)
         except serial.serialutil.SerialException as e:
             logger.warning("mmWave serial exception on %s: %s", serial_port, e)
-            return {"error": f"serial error on {serial_port}: {e}", "status": "disconnected"}
+            return tool_error(f"serial error on {serial_port}: {e}", status="disconnected")
         except OSError as e:
             logger.warning("mmWave OS error on %s: %s", serial_port, e)
-            return {"error": f"device I/O error on {serial_port}: {e}", "status": "disconnected"}
+            return tool_error(f"device I/O error on {serial_port}: {e}", status="disconnected")
         except Exception as e:
             logger.exception("mmWave tool failed")
-            return {"error": str(e)}
+            return tool_error(str(e))

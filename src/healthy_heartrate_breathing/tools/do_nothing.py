@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok
 
 
 logger = logging.getLogger(__name__)
@@ -27,4 +27,4 @@ class DoNothing(Tool):
         """Do nothing - stay still and silent."""
         reason = kwargs.get("reason", "just chilling")
         logger.info("Tool call: do_nothing reason=%s", reason)
-        return {"status": "doing nothing", "reason": reason}
+        return tool_ok("doing nothing", reason=reason)

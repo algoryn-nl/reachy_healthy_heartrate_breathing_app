@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok, tool_error
 
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ class Dance(Tool):
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
         """Play a named or random dance move once (or repeat). Non-blocking."""
         if not DANCE_AVAILABLE:
-            return {"error": "Dance system not available"}
+            return tool_error("Dance system not available")
 
         move_name = kwargs.get("move")
         repeat = int(kwargs.get("repeat", 1))
@@ -75,7 +75,7 @@ class Dance(Tool):
             move_name = random.choice(list(AVAILABLE_MOVES.keys()))
 
         if move_name not in AVAILABLE_MOVES:
-            return {"error": f"Unknown dance move '{move_name}'. Available: {list(AVAILABLE_MOVES.keys())}"}
+            return tool_error(f"Unknown dance move '{move_name}'. Available: {list(AVAILABLE_MOVES.keys())}")
 
         # Add dance moves to queue
         movement_manager = deps.movement_manager
@@ -83,4 +83,4 @@ class Dance(Tool):
             dance_move = DanceQueueMove(move_name)
             movement_manager.queue_move(dance_move)
 
-        return {"status": "queued", "move": move_name, "repeat": repeat}
+        return tool_ok("queued", move=move_name, repeat=repeat)

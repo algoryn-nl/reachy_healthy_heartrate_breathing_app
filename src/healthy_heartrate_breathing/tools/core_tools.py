@@ -353,16 +353,12 @@ async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependenc
     """Dispatch a tool call by name with JSON args and dependencies."""
     _initialize_tools()
     if tool_name in _get_env_disabled_tools():
-        return {
-            "status": "disabled",
-            "tool": tool_name,
-            "reason": "tool disabled via HEALTHY_DISABLED_TOOLS",
-        }
+        return tool_ok("disabled", tool=tool_name, reason="tool disabled via HEALTHY_DISABLED_TOOLS")
 
     tool = ALL_TOOLS.get(tool_name)
 
     if not tool:
-        return {"error": f"unknown tool: {tool_name}"}
+        return tool_error(f"unknown tool: {tool_name}")
 
     args = _safe_load_obj(args_json)
     try:
@@ -370,4 +366,4 @@ async def dispatch_tool_call(tool_name: str, args_json: str, deps: ToolDependenc
     except Exception as e:
         msg = f"{type(e).__name__}: {e}"
         logger.exception("Tool error in %s: %s", tool_name, msg)
-        return {"error": msg}
+        return tool_error(msg)

@@ -11,7 +11,7 @@ from typing import Any, Dict
 import numpy as np
 
 from reachy_mini.utils import create_head_pose
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok, tool_error
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
 
 
@@ -44,7 +44,7 @@ class SweepLook(Tool):
             return self._build_and_queue_moves(deps)
         except Exception as e:
             logger.error("sweep_look failed: %s", e)
-            return {"error": f"{type(e).__name__}: {e}"}
+            return tool_error(f"{type(e).__name__}: {e}")
 
     def _build_and_queue_moves(self, deps: ToolDependencies) -> Dict[str, Any]:
         """Build the 6-move sweep sequence and queue it."""
@@ -143,4 +143,4 @@ class SweepLook(Tool):
         total_duration = SWEEP_TRANSITION_S * 4 + SWEEP_HOLD_S * 2
         deps.movement_manager.set_moving_state(total_duration)
 
-        return {"status": f"sweeping look left-right-center, total {total_duration:.1f}s"}
+        return tool_ok(f"sweeping look left-right-center, total {total_duration:.1f}s")

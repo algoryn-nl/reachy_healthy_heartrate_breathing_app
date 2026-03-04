@@ -2,7 +2,7 @@ import logging
 from typing import Any, Dict, Tuple, Literal
 
 from reachy_mini.utils import create_head_pose
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok, tool_error
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
 
 
@@ -40,7 +40,7 @@ class MoveHead(Tool):
         """Move head in a given direction."""
         direction_raw = kwargs.get("direction")
         if not isinstance(direction_raw, str):
-            return {"error": "direction must be a string"}
+            return tool_error("direction must be a string")
         direction: Direction = direction_raw  # type: ignore[assignment]
         logger.info("Tool call: move_head direction=%s", direction)
 
@@ -72,8 +72,8 @@ class MoveHead(Tool):
             movement_manager.queue_move(goto_move)
             movement_manager.set_moving_state(deps.motion_duration_s)
 
-            return {"status": f"looking {direction}"}
+            return tool_ok(f"looking {direction}")
 
         except Exception as e:
             logger.error("move_head failed")
-            return {"error": f"move_head failed: {type(e).__name__}: {e}"}
+            return tool_error(f"move_head failed: {type(e).__name__}: {e}")

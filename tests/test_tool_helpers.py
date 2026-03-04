@@ -1,8 +1,9 @@
 """Tests for tool_ok / tool_error helper functions."""
+# ruff: noqa: D101, D102, D103
 
 from __future__ import annotations
 
-from healthy_heartrate_breathing.tools.core_tools import tool_error, tool_ok
+from healthy_heartrate_breathing.tools.core_tools import tool_ok, tool_error
 
 
 class TestToolOk:

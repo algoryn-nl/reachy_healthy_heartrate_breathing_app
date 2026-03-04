@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok
 
 
 logger = logging.getLogger(__name__)
@@ -28,4 +28,4 @@ class StopDance(Tool):
         logger.info("Tool call: stop_dance")
         movement_manager = deps.movement_manager
         movement_manager.clear_move_queue()
-        return {"status": "stopped dance and cleared queue"}
+        return tool_ok("stopped dance and cleared queue")

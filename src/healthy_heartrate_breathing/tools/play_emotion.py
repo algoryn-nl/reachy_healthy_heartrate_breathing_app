@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok, tool_error
 
 
 logger = logging.getLogger(__name__)
@@ -58,11 +58,11 @@ class PlayEmotion(Tool):
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
         """Play a pre-recorded emotion."""
         if not EMOTION_AVAILABLE:
-            return {"error": "Emotion system not available"}
+            return tool_error("Emotion system not available")
 
         emotion_name = kwargs.get("emotion")
         if not emotion_name:
-            return {"error": "Emotion name is required"}
+            return tool_error("Emotion name is required")
 
         logger.info("Tool call: play_emotion emotion=%s", emotion_name)
 
@@ -70,15 +70,15 @@ class PlayEmotion(Tool):
         try:
             emotion_names = RECORDED_MOVES.list_moves()
             if emotion_name not in emotion_names:
-                return {"error": f"Unknown emotion '{emotion_name}'. Available: {emotion_names}"}
+                return tool_error(f"Unknown emotion '{emotion_name}'. Available: {emotion_names}")
 
             # Add emotion to queue
             movement_manager = deps.movement_manager
             emotion_move = EmotionQueueMove(emotion_name, RECORDED_MOVES)
             movement_manager.queue_move(emotion_move)
 
-            return {"status": "queued", "emotion": emotion_name}
+            return tool_ok("queued", emotion=emotion_name)
 
         except Exception as e:
             logger.exception("Failed to play emotion")
-            return {"error": f"Failed to play emotion: {e!s}"}
+            return tool_error(f"Failed to play emotion: {e!s}")

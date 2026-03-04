@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies
+from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_ok
 
 
 logger = logging.getLogger(__name__)
@@ -36,4 +36,4 @@ class CustomTool(Tool):
         # - deps.movement_manager: for queueing movements
         # - deps.state: current conversation state
 
-        return {"status": "ok"}
+        return tool_ok()
