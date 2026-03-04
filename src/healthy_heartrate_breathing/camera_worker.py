@@ -23,7 +23,22 @@ logger = logging.getLogger(__name__)
 
 
 class CameraWorker:
-    """Thread-safe camera worker with frame buffering and face tracking."""
+    """Thread-safe camera worker with frame buffering and face tracking.
+
+    Threading contract
+    ------------------
+    * **Worker thread** — ``working_loop()`` runs in a dedicated daemon thread
+      started by ``start()``.  It is the sole writer of ``latest_frame`` and
+      ``face_tracking_offsets``, always under their respective locks.
+    * **Main / tool threads** — call ``get_latest_frame()`` and
+      ``get_face_tracking_offsets()`` (read-only, lock-protected).
+    * **Any thread** may call ``set_head_tracking_enabled()`` (plain bool
+      assignment is atomic in CPython; the worker reads it each iteration).
+
+    Lock inventory (acquire at most one at a time — no nesting required):
+    * ``frame_lock``          — guards ``latest_frame``
+    * ``face_tracking_lock``  — guards ``face_tracking_offsets``
+    """
 
     def __init__(self, reachy_mini: ReachyMini, head_tracker: Any = None) -> None:
         """Initialize."""
