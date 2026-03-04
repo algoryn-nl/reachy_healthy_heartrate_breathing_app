@@ -36,6 +36,23 @@ class ToolRegistryError(RuntimeError):
     """Fatal error during tool registry initialization."""
 
 
+def tool_ok(status: str = "ok", **extra: Any) -> Dict[str, Any]:
+    """Build a standardized tool success dict.
+
+    Always contains ``"status"``; never contains ``"error"``.
+    """
+    return {"status": status, **extra}
+
+
+def tool_error(message: str, **extra: Any) -> Dict[str, Any]:
+    """Build a standardized tool error dict.
+
+    Always contains ``"error"``; may carry additional keys
+    (e.g. ``status="disconnected"`` for hardware faults).
+    """
+    return {"error": message, **extra}
+
+
 ALL_TOOLS: Dict[str, "Tool"] = {}
 ALL_TOOL_SPECS: List[Dict[str, Any]] = []
 _TOOLS_INITIALIZED = False
