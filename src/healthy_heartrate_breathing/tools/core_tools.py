@@ -343,7 +343,10 @@ def get_tool_specs(exclusion_list: list[str] | None = None) -> list[Dict[str, An
 def _safe_load_obj(args_json: str) -> Dict[str, Any]:
     try:
         parsed_args = json.loads(args_json or "{}")
-        return parsed_args if isinstance(parsed_args, dict) else {}
+        if not isinstance(parsed_args, dict):
+            logger.warning("args_json parsed to %s, expected dict: %r", type(parsed_args).__name__, args_json)
+            return {}
+        return parsed_args
     except Exception:
         logger.warning("bad args_json=%r", args_json)
         return {}

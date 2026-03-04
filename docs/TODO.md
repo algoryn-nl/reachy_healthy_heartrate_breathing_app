@@ -52,7 +52,7 @@
 ### Upcoming — Low Priority
 
 - [x] **PY-LOW-1**: Validate IdlePolicy constructor parameters (reject negative/zero timings) — 9 `ValueError` checks matching constraint table; 12 tests (2026-03-01)
-- [ ] **PY-LOW-2**: Log warning in `_safe_load_obj()` instead of silent `{}` return
+- [x] **PY-LOW-2**: Log warning in `_safe_load_obj()` instead of silent `{}` return (2026-03-04)
 - [x] **PY-LOW-3**: Clean up `sys.modules` on `exec_module()` failure in `_load_module_from_file()` — try/except + pop on error; 2 tests (2026-03-01)
 - [x] **PY-LOW-4**: Add error handling + named constants to `sweep_look.py` — `SWEEP_MAX_ANGLE_RAD`, `SWEEP_TRANSITION_S`, `SWEEP_HOLD_S`; try/except returns error dict; docstring documents angle difference from mmWave; 3 tests (2026-03-01)
 - [x] **PY-LOW-5**: Consolidate personality REST save endpoints — redundant GET variant removed with PY-MED-1 (2026-03-01)
