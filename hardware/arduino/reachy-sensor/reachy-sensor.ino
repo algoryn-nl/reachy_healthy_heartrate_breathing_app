@@ -1066,6 +1066,144 @@ void pollRadar(uint32_t now) {
   snap.heartRate = hr;
 }
 
+// ---------------------------------------------------------------------------
+// tickStateMachine() — Fixed-rate state machine tick (10 Hz)
+// ---------------------------------------------------------------------------
+// Reads from SensorSnapshot (written by pollRadar) and runs the full
+// state decision + telemetry emission. All hysteresis uses wall-clock
+// durations, not frame counts.
+void tickStateMachine(uint32_t now) {
+
+  // Snapshot the host-controlled head-moving flag (consistent for this tick).
+  bool headMoving = host.headMoving;
+
+  // --- Radar staleness override ---
+  bool radarStale = (snap.radarMs == 0) || ((now - snap.radarMs) > RADAR_STALE_MS);
+  bool humanDetected = radarStale ? false : snap.humanDetected;
+  uint8_t nTargets   = radarStale ? 0     : snap.nTargets;
+  float dist_cm      = radarStale ? NAN   : snap.dist_cm;
+  bool dist_ok       = radarStale ? false : snap.dist_ok;
+  float br           = radarStale ? NAN   : snap.breathRate;
+  bool br_ok         = radarStale ? false : snap.br_ok;
+  float hr           = radarStale ? NAN   : snap.heartRate;
+  bool hr_ok         = radarStale ? false : snap.hr_ok;
+  FocusTarget focus  = radarStale ? FocusTarget{} : snap.focus;
+
+  // Clear the fresh flag after consuming
+  snap.radarFresh = false;
+
+  // ── Presence detection ──────────────────────────────────────────────────
+  bool present_now = humanDetected || (nTargets > 0) ||
+                     (dist_ok && isFinitePositive(dist_cm)) ||
+                     (br_ok && isFinitePositive(br)) ||
+                     (hr_ok && isFinitePositive(hr));
+
+  if (present_now) {
+    presence.lastMs = now;
+  }
+  bool presence_recent = (now - presence.lastMs) < ABSENT_HOLD_MS;
+
+  // ── Movement detection ──────────────────────────────────────────────────
+  bool targetMoving = focus.valid && isfinite(focus.speed_cm_s) &&
+                      fabsf(focus.speed_cm_s) >= MOVING_CM_S;
+  bool moving = headMoving || targetMoving;
+
+  // ── Near zone check ─────────────────────────────────────────────────────
+  bool near = (!isnan(dist_cm) && dist_cm >= NEAR_MIN_DIST_CM &&
+               dist_cm <= NEAR_MAX_DIST_CM);
+
+  // ── Vitals validity gating (wall-clock durations) ───────────────────────
+  bool singleTarget = (nTargets == 1);
+  if (singleTarget) {
+    presence.seenSingleTarget = true;
+    presence.lastSingleTargetMs = now;
+  }
+
+  // Track time with stable human signal (replaces humanStableStreak)
+  if (humanDetected && !headMoving) {
+    if (presence.humanStableSinceMs == 0) presence.humanStableSinceMs = now;
+  } else {
+    presence.humanStableSinceMs = 0;
+  }
+
+  // Fallback lock
+  bool singleTargetRecent = presence.seenSingleTarget &&
+                            ((now - presence.lastSingleTargetMs) <= TARGET_LOSS_GRACE_MS);
+  bool humanStableLongEnough = (presence.humanStableSinceMs > 0) &&
+                               ((now - presence.humanStableSinceMs) >= STABLE_FALLBACK_MS);
+  bool fallbackTargetLock = (!singleTarget) && (nTargets == 0) &&
+                            singleTargetRecent && humanStableLongEnough;
+
+  // Guard rail check
+  bool br_valid = br_ok && isfinite(br) && (br >= host.brMin) && (br <= host.brMax);
+  bool hr_valid = hr_ok && isfinite(hr) && (hr >= host.hrMin) && (hr <= host.hrMax);
+
+  // Three-level vitals gate
+  bool vitals_allowed = !headMoving && (singleTarget || fallbackTargetLock);
+  bool vitals_valid = vitals_allowed && br_valid && hr_valid;
+
+  // Track time with valid vitals (replaces vitalsStreak)
+  if (vitals_valid) {
+    if (presence.vitalsValidSinceMs == 0) presence.vitalsValidSinceMs = now;
+  } else {
+    presence.vitalsValidSinceMs = 0;
+  }
+  bool vitalsConfirmed = (presence.vitalsValidSinceMs > 0) &&
+                         ((now - presence.vitalsValidSinceMs) >= VITALS_CONFIRM_MS);
+
+  // ── State decision ──────────────────────────────────────────────────────
+  PersonState s;
+  if (!presence_recent) {
+    s = PersonState::NO_TARGET;
+    presence.vitalsValidSinceMs = 0;
+  } else if (nTargets > 1) {
+    s = PersonState::MULTI_TARGET;
+    presence.vitalsValidSinceMs = 0;
+  } else if (moving) {
+    s = PersonState::MOVING;
+    presence.vitalsValidSinceMs = 0;
+  } else if (near && vitalsConfirmed) {
+    s = PersonState::RESTING_VITALS;
+  } else if (near) {
+    s = PersonState::STILL_NEAR;
+  } else {
+    s = PersonState::PRESENT_FAR;
+  }
+
+  PoseGuess p = guessPose(s, dist_cm);
+  uint32_t t_ms = now - t0;
+
+  // ── Emit telemetry ──────────────────────────────────────────────────────
+
+  // EVT_TARGETS
+  bool haveTargets = (nTargets > 0);
+  if (haveTargets && (now - emitTimers.targets >= host.targetsMs)) {
+    emitTimers.targets = now;
+    emitTargets(t_ms, snap.targetInfo, snap.focus);
+  }
+
+  // EVT_STATE
+  bool stateChanged = (s != prev.s) || (p != prev.p) ||
+                      (headMoving != prev.hm) || (nTargets != prev.n);
+  bool intervalOk = (now - emitTimers.state >= STATE_MIN_INTERVAL_MS);
+  if ((stateChanged && intervalOk) || (now - emitTimers.state > 1000)) {
+    emitTimers.state = now;
+    emitState(t_ms, s, p, headMoving, humanDetected, nTargets, dist_cm, dist_ok);
+    prev.s = s;
+    prev.p = p;
+    prev.hm = headMoving;
+    prev.n = nTargets;
+  }
+
+  // EVT_BIO
+  if (now - emitTimers.bio >= host.bioMs) {
+    emitTimers.bio = now;
+    bool br_emit_ok = vitals_allowed && br_valid;
+    bool hr_emit_ok = vitals_allowed && hr_valid;
+    emitBio(t_ms, vitals_allowed, vitals_valid, br, br_emit_ok, hr, hr_emit_ok);
+  }
+}
+
 // ============================================================================
 // Arduino entry points: setup() and loop()
 // ============================================================================
