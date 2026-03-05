@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Any
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -165,7 +166,27 @@ class Config:
             logger.info("'REACHY_MINI_EXTERNAL_TOOLS_DIRECTORY' is not set. Using built-in shared tools only.")
 
 
-config = Config()
+_config_instance: Config | None = None
+
+
+def _get_config() -> Config:
+    """Return the Config singleton, creating it on first access."""
+    global _config_instance
+    if _config_instance is None:
+        _config_instance = Config()
+    return _config_instance
+
+
+def _reset_config() -> None:
+    """Reset the singleton for testing. Not for production use."""
+    global _config_instance
+    _config_instance = None
+
+
+def __getattr__(name: str) -> Any:
+    if name == "config":
+        return _get_config()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def set_custom_profile(profile: str | None) -> None:
@@ -177,7 +198,7 @@ def set_custom_profile(profile: str | None) -> None:
     if LOCKED_PROFILE is not None:
         return
     try:
-        config.REACHY_MINI_CUSTOM_PROFILE = profile
+        _get_config().REACHY_MINI_CUSTOM_PROFILE = profile
     except Exception:
         pass
     try:

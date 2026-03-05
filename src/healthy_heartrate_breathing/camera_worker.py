@@ -32,12 +32,15 @@ class CameraWorker:
       ``face_tracking_offsets``, always under their respective locks.
     * **Main / tool threads** — call ``get_latest_frame()`` and
       ``get_face_tracking_offsets()`` (read-only, lock-protected).
-    * **Any thread** may call ``set_head_tracking_enabled()`` (plain bool
-      assignment is atomic in CPython; the worker reads it each iteration).
+    * **Any thread** may call ``set_head_tracking_enabled()`` which writes
+      ``is_head_tracking_enabled`` under ``_tracking_lock``.  The worker
+      snapshots the value once per iteration under the same lock so that
+      mid-iteration changes cannot cause inconsistent behaviour.
 
     Lock inventory (acquire at most one at a time — no nesting required):
     * ``frame_lock``          — guards ``latest_frame``
     * ``face_tracking_lock``  — guards ``face_tracking_offsets``
+    * ``_tracking_lock``      — guards ``is_head_tracking_enabled``
     """
 
     def __init__(self, reachy_mini: ReachyMini, head_tracker: Any = None) -> None:
@@ -52,6 +55,7 @@ class CameraWorker:
         self._thread: threading.Thread | None = None
 
         # Face tracking state
+        self._tracking_lock = threading.Lock()
         self.is_head_tracking_enabled = True
         self.face_tracking_offsets: List[float] = [
             0.0,
@@ -91,7 +95,8 @@ class CameraWorker:
 
     def set_head_tracking_enabled(self, enabled: bool) -> None:
         """Enable/disable head tracking."""
-        self.is_head_tracking_enabled = enabled
+        with self._tracking_lock:
+            self.is_head_tracking_enabled = enabled
         logger.info(f"Head tracking {'enabled' if enabled else 'disabled'}")
 
     def start(self) -> None:
@@ -118,11 +123,16 @@ class CameraWorker:
 
         # Initialize head tracker if available
         neutral_pose = np.eye(4)  # Neutral pose (identity matrix)
-        self.previous_head_tracking_state = self.is_head_tracking_enabled
+        with self._tracking_lock:
+            self.previous_head_tracking_state = self.is_head_tracking_enabled
 
         while not self._stop_event.is_set():
             try:
                 current_time = time.time()
+
+                # Snapshot tracking flag once per iteration for consistency
+                with self._tracking_lock:
+                    tracking_enabled = self.is_head_tracking_enabled
 
                 # Get frame from robot
                 frame = self.reachy_mini.media.get_frame()
@@ -133,17 +143,17 @@ class CameraWorker:
                         self.latest_frame = frame  # .copy()
 
                     # Check if face tracking was just disabled
-                    if self.previous_head_tracking_state and not self.is_head_tracking_enabled:
+                    if self.previous_head_tracking_state and not tracking_enabled:
                         # Face tracking was just disabled - start interpolation to neutral
                         self.last_face_detected_time = current_time  # Trigger the face-lost logic
                         self.interpolation_start_time = None  # Will be set by the face-lost interpolation
                         self.interpolation_start_pose = None
 
                     # Update tracking state
-                    self.previous_head_tracking_state = self.is_head_tracking_enabled
+                    self.previous_head_tracking_state = tracking_enabled
 
                     # Handle face tracking if enabled and head tracker available
-                    if self.is_head_tracking_enabled and self.head_tracker is not None:
+                    if tracking_enabled and self.head_tracker is not None:
                         eye_center, _ = self.head_tracker.get_head_position(frame)
 
                         if eye_center is not None:

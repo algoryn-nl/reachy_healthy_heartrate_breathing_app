@@ -130,10 +130,10 @@
 - ~~**`sys.exit()` in library code** (`config.py`, `prompts.py`): Blocks testability, prevents graceful error recovery.~~ (fixed: `ConfigError` exception + `main.py` catch; 2026-02-28)
 - ~~**Path traversal in personality management**: User-supplied profile names not validated against directory escape.~~ (fixed: `resolve().is_relative_to()` containment checks in both headless and Gradio paths + `_write_profile` defense-in-depth; 33 security tests; 2026-02-28)
 - ~~**Falsy-zero default pattern**: `value or DEFAULT` treats 0.0/0/""/False as missing. Confirmed bug in `light_context.py`, likely present elsewhere.~~ (fixed: removed redundant `or DEFAULT` fallbacks — thresholds already resolved via `coerce_float()` with defaults; audited codebase, no other instances; 4 regression tests; 2026-02-28)
-- **Thread safety gaps**: ~~Tool registry globals unprotected~~ (fixed: `_REGISTRY_LOCK` with double-checked locking, 2026-03-01); camera_worker state transitions unsynchronized. ~~MovementManager start/stop~~ (fixed: `_lifecycle_lock`, 2026-03-01). ~~HeadWobbler generation TOCTOU~~ (fixed: consolidated lock hold + generation guard inside `_sway_lock`, 2026-03-01). Priority: high.
+- ~~**Thread safety gaps**: ~~Tool registry globals unprotected~~ (fixed: `_REGISTRY_LOCK` with double-checked locking, 2026-03-01); ~~camera_worker state transitions unsynchronized~~ (fixed: `_tracking_lock` + per-iteration snapshot, 2026-03-05). ~~MovementManager start/stop~~ (fixed: `_lifecycle_lock`, 2026-03-01). ~~HeadWobbler generation TOCTOU~~ (fixed: consolidated lock hold + generation guard inside `_sway_lock`, 2026-03-01).~~ (all resolved)
 - ~~**Firmware vitals logic bugs**: Hysteresis bypass in emitBio, stale vitals in fallback lock, dist_ok race condition.~~ (fixed: 2026-02-28)
 - ~~**Error handling inconsistency**: Three patterns (error dicts, exceptions, sys.exit) coexist across the codebase.~~ (fixed: `tool_ok()`/`tool_error()` helpers standardize all tool returns; `sys.exit()` only in `main.py`; 2026-03-04)
-- **Config singleton at import time**: `config = Config()` in `config.py` module body. Import-time failure cascades to all dependents. Priority: medium.
+- ~~**Config singleton at import time**: `config = Config()` in `config.py` module body. Import-time failure cascades to all dependents.~~ (fixed: `__getattr__` lazy init + `_reset_config()` test helper; 2026-03-05)
 
 #### Resolved
 
