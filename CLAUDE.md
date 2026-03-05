@@ -216,6 +216,7 @@ The project includes a custom hardware component under `hardware/`.
 **Firmware**: `hardware/arduino/reachy-sensor/reachy-sensor.ino` (includes `reachy_codec.h`)
 - Reads mmWave data (presence, targets, distance, heart rate, breathing rate) and lux values
 - Implements a state machine with person states: `NO_TARGET`, `MULTI_TARGET`, `PRESENT_FAR`, `MOVING`, `STILL_NEAR`, `RESTING_VITALS`
+- Poll/tick architecture: `pollRadar()` writes `SensorSnapshot` every iteration; `tickStateMachine()` runs at fixed 10 Hz with wall-clock hysteresis (no frame-count coupling)
 - Vitals gating: heart/breath rates only reported when single-target, still, not head-moving, within near zone (35–150cm)
 - Guard rails: BR 4–30 bpm, HR 35–200 bpm
 - Depends on Seeed mmWave library (git submodule in `hardware/arduino/lib/Seeed-mmWave-library/`) and Arduino BH1750 library
