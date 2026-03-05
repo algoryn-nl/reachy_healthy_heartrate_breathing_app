@@ -5,62 +5,110 @@ config:
     htmlLabels: true
 ---
 flowchart TB
-    User(["<span style='font-size:16px;font-weight:bold;'>User</span><br><span style='font-size:13px;color:#01579b;'>Person interacting with system</span>"]) 
-      -- audio stream --> 
-    UI@{ label: "<span style='font-size:16px;font-weight:bold;'>UI Layer</span><br><span style='font-size:13px;color:#0277bd;'>Gradio/Console</span>" }
+    User(["<span style='font-size:16px;font-weight:bold;'>User</span><br><span style='font-size:13px;color:#01579b;'>Person interacting with system</span>"])
+      -- audio stream -->
+    UI@{ label: "<span style='font-size:16px;font-weight:bold;'>UI Layer</span><br><span style='font-size:13px;color:#0277bd;'>Gradio / Console</span>" }
 
-    UI -- audio stream --> 
-    OpenAI@{ label: "<span style='font-size:17px;font-weight:bold;'>gpt-realtime API</span><br><span style='font-size:13px; color:#7b1fa2;'>Audio+Tool Calls+Vision</span>" }
+    UI -- audio stream -->
+    OpenAI@{ label: "<span style='font-size:17px;font-weight:bold;'>gpt-realtime API</span><br><span style='font-size:13px;color:#7b1fa2;'>Audio + Tool Calls + Vision</span>" }
 
-    OpenAI -- audio stream --> 
-    Motion@{ label: "<span style='font-size:16px;font-weight:bold;'>Motion Control</span><br><span style='font-size:13px;color:#f57f17;'>Audio Sync + Tracking</span>" }
-    
+    OpenAI -- audio deltas -->
+    AudioRouter@{ label: "<span style='font-size:16px;font-weight:bold;'>AudioRouter</span><br><span style='font-size:13px;color:#0277bd;'>Decode + Route Audio</span>" }
+
+    AudioRouter -- base64 audio -->
+    HeadWobbler@{ label: "<span style='font-size:16px;font-weight:bold;'>HeadWobbler</span><br><span style='font-size:13px;color:#f57f17;'>Audio-Reactive Head Motion</span>" }
+
+    AudioRouter -- playback --> UI
+
+    HeadWobbler -- speech offsets --> Motion
+
     OpenAI -- tool calls -->
-    Handlers@{ label: "<span style='font-size:16px;font-weight:bold;'>Tool Handlers</span><br><span style='font-size:12px;color:#f9a825;'>move_head, camera, head_tracking,<br/>dance, play_emotion, mmWave,<br/>light_context, do_nothing</span>" }
+    ToolDispatcher@{ label: "<span style='font-size:16px;font-weight:bold;'>ToolDispatcher</span><br><span style='font-size:13px;color:#f9a825;'>Async dispatch · Semaphore(1) · Timeout</span>" }
 
-    Handlers -- movement 
-    requests --> Motion
+    ToolDispatcher -- dispatches -->
+    Tools@{ label: "<span style='font-size:16px;font-weight:bold;'>Tool Handlers</span><br><span style='font-size:12px;color:#f9a825;'>mmWave · light_context · sweep_look<br/>vitals_trends · camera · move_head<br/>dance · play_emotion · head_tracking<br/>do_nothing · stop_dance · stop_emotion</span>" }
 
-    Handlers -- camera frames, face tracking --> 
-    Camera@{ label: "<span style='font-size:16px;font-weight:bold;'>Camera Worker</span><br><span style='font-size:13px;color:#f57f17;'>Frame Buffer + Face Tracking</span>" }
-    
-    Handlers -. image for 
+    IdlePolicy@{ label: "<span style='font-size:14px;font-weight:bold;'>IdlePolicy</span><br><span style='font-size:12px;color:#0277bd;'>Probe scheduling<br/>Multi-target aware</span>" }
+    -- triggers probes --> ToolDispatcher
+
+    LightOrch@{ label: "<span style='font-size:14px;font-weight:bold;'>LightOrchestrator</span><br><span style='font-size:12px;color:#0277bd;'>Auto light_context<br/>Lux delta tracking</span>" }
+    -- auto-dispatch --> ToolDispatcher
+
+    Tools -- movement requests --> Motion@{ label: "<span style='font-size:16px;font-weight:bold;'>MovementManager</span><br><span style='font-size:13px;color:#f57f17;'>Primary/Secondary moves · ~100 Hz</span>" }
+
+    Tools -- camera frames, face tracking -->
+    Camera@{ label: "<span style='font-size:16px;font-weight:bold;'>Camera Worker</span><br><span style='font-size:13px;color:#f57f17;'>Frame Buffer + Head Tracking</span>" }
+
+    Tools -. image for
     analysis .-> OpenAI
 
     Camera -- face tracking --> Motion
 
-    Camera -. frames .-> 
+    Camera -. frames .->
     Vision@{ label: "<span style='font-size:16px;font-weight:bold;'>Vision Processor</span><br><span style='font-size:13px;color:#7b1fa2;'>Local VLM (optional)</span>" }
 
-    Vision -. description .-> Handlers
+    Vision -. description .-> Tools
 
-    Robot@{ label: "<span style='font-size:16px;font-weight:bold;'>reachy_mini</span><br><span style='font-size:13px;color:#c62828;'>Robot Control Library</span>" } 
-    -- camera 
-    frames --> Camera
+    Robot@{ label: "<span style='font-size:16px;font-weight:bold;'>reachy_mini</span><br><span style='font-size:13px;color:#c62828;'>Robot Control Library</span>" }
+    -- camera frames --> Camera
 
     Motion -- commands --> Robot
 
-    Handlers -- USB serial
-    (VID/PID detection) -->
-    mmWaveSensor@{ label: "<span style='font-size:16px;font-weight:bold;'>mmWave Sensor</span><br><span style='font-size:13px;color:#c62828;'>MR60BHA2 + BH1750 Light</span>" }
+    Tools -- USB serial
+    (COBS + CRC-16) -->
+    mmWaveSensor@{ label: "<span style='font-size:16px;font-weight:bold;'>mmWave Sensor</span><br><span style='font-size:13px;color:#c62828;'>MR60BHA2 + BH1750 Lux</span>" }
 
     mmWaveSensor -- telemetry
-    (targets, vitals, lux) --> Handlers
+    (targets, vitals, lux) --> Tools
 
-    Handlers -- results --> OpenAI
+    Tools -- results --> ToolDispatcher
+    ToolDispatcher -- results + trend insights --> OpenAI
 
-     User:::userStyle
-     UI:::uiStyle
-     OpenAI:::aiStyle
-     Motion:::coreStyle
-     Handlers:::toolStyle
-     Camera:::coreStyle
-     Vision:::aiStyle
-     Robot:::hardwareStyle
-     mmWaveSensor:::hardwareStyle
+    ToolDispatcher -- vitals -->
+    VitalsStore@{ label: "<span style='font-size:16px;font-weight:bold;'>VitalsStore</span><br><span style='font-size:13px;color:#2e7d32;'>SQLite · 4h raw window</span>" }
+
+    VitalsStore -->
+    Aggregator@{ label: "<span style='font-size:16px;font-weight:bold;'>VitalsAggregator</span><br><span style='font-size:13px;color:#2e7d32;'>Hourly (30d) · Daily (90d)</span>" }
+
+    Aggregator -->
+    TrendAnalyzer@{ label: "<span style='font-size:16px;font-weight:bold;'>TrendAnalyzer</span><br><span style='font-size:13px;color:#2e7d32;'>Anomaly detection · Insights</span>" }
+
+    TrendAnalyzer -. trend insights .-> ToolDispatcher
+
+    ToolDispatcher -- sensor state -->
+    Broadcaster@{ label: "<span style='font-size:16px;font-weight:bold;'>SensorBroadcaster</span><br><span style='font-size:13px;color:#0277bd;'>WebSocket push</span>" }
+
+    Broadcaster -- WS /ws/sensor --> Dashboard
+    VitalsStore -- REST /api/vitals/history --> Dashboard
+    TrendAnalyzer -- REST /api/vitals/trends --> Dashboard
+
+    Dashboard@{ label: "<span style='font-size:16px;font-weight:bold;'>Dashboard</span><br><span style='font-size:13px;color:#01579b;'>Vitals card · Radar canvas<br/>History chart · Trends panel</span>" }
+    --> UI
+
+    User:::userStyle
+    UI:::uiStyle
+    OpenAI:::aiStyle
+    AudioRouter:::uiStyle
+    HeadWobbler:::coreStyle
+    Motion:::coreStyle
+    ToolDispatcher:::toolStyle
+    Tools:::toolStyle
+    IdlePolicy:::uiStyle
+    LightOrch:::uiStyle
+    Camera:::coreStyle
+    Vision:::aiStyle
+    Robot:::hardwareStyle
+    mmWaveSensor:::hardwareStyle
+    VitalsStore:::dataStyle
+    Aggregator:::dataStyle
+    TrendAnalyzer:::dataStyle
+    Broadcaster:::uiStyle
+    Dashboard:::userStyle
+
     classDef userStyle fill:#e1f5fe,stroke:#01579b,stroke-width:3px
     classDef uiStyle fill:#b3e5fc,stroke:#0277bd,stroke-width:2px
     classDef aiStyle fill:#e1bee7,stroke:#7b1fa2,stroke-width:3px
     classDef coreStyle fill:#fff9c4,stroke:#f57f17,stroke-width:2px
     classDef hardwareStyle fill:#ef9a9a,stroke:#c62828,stroke-width:3px
     classDef toolStyle fill:#fffde7,stroke:#f9a825,stroke-width:1px
+    classDef dataStyle fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
