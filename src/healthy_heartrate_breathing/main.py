@@ -157,6 +157,23 @@ def run(
 
         personality_ui.wire_events(handler, stream_manager)
 
+        # Mount live sensor WebSocket and vitals history REST endpoint
+        from starlette.websockets import WebSocket, WebSocketDisconnect
+
+        @app.websocket("/ws/sensor")
+        async def ws_sensor(websocket: WebSocket) -> None:
+            await websocket.accept()
+            handler.sensor_broadcaster.connect(websocket)
+            try:
+                while True:
+                    await websocket.receive_text()  # keep-alive; ignore client messages
+            except WebSocketDisconnect:
+                handler.sensor_broadcaster.disconnect(websocket)
+
+        @app.get("/api/vitals/history")
+        async def vitals_history(hours: int = 4) -> dict:
+            return {"rows": handler.vitals_store.query(hours=min(hours, 24))}
+
         app = gr.mount_gradio_app(app, stream.ui, path="/")
     else:
         # In headless mode, wire settings_app + instance_path to console LocalStream

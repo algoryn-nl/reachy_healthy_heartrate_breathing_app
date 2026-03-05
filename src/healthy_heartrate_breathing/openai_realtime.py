@@ -124,6 +124,11 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
 
         _light_user_id = (os.getenv("HEALTHY_LIGHT_CONTEXT_USER_ID", "default") or "default").strip() or "default"
+        # Live WebSocket broadcast for sensor updates
+        from healthy_heartrate_breathing.sensor_ws import SensorBroadcaster
+
+        self.sensor_broadcaster = SensorBroadcaster()
+
         # Vitals history store (SQLite, rolling window)
         from healthy_heartrate_breathing.vitals_store import VitalsStore
 
@@ -157,9 +162,10 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         return any(spec.get("name") == name for spec in get_tool_specs())
 
     def _replace_sensor_state(self, state: dict[str, Any]) -> None:
-        """Replace sensor_state with a fresh snapshot (clear stale keys)."""
+        """Replace sensor_state with a fresh snapshot and broadcast to WS clients."""
         self.sensor_state.clear()
         self.sensor_state.update(state)
+        self.sensor_broadcaster.broadcast(state)
 
     def _touch_activity(self) -> None:
         """Update the last activity timestamp."""
