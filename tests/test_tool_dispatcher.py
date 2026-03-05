@@ -892,3 +892,25 @@ class TestVitalsStoreIntegration:
         await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=False)
         # Result should still be sent despite vitals_append failure
         assert send_result.called
+
+
+class TestExtractSensorStateTargets:
+    def test_recent_targets_included_in_state(self) -> None:
+        result = {
+            "status": "ok",
+            "mode": "scan",
+            "scan": {
+                "device_state": "MULTI_TARGET",
+                "max_target_count": 2,
+                "targets_truncated": False,
+                "latest_target": {"cluster": 0, "x": 0.5, "y": 0.1, "r": 0.8, "bearing": 0.12, "v": 0.0},
+                "recent_targets": [
+                    {"cluster": 0, "x": 0.5, "y": 0.1, "r": 0.8, "bearing": 0.12, "v": 0.0},
+                    {"cluster": 1, "x": -0.3, "y": 0.6, "r": 0.9, "bearing": -0.4, "v": 0.02},
+                ],
+            },
+        }
+        state = extract_sensor_state(result)
+        assert "targets" in state
+        assert len(state["targets"]) == 2
+        assert state["targets"][0]["x"] == 0.5

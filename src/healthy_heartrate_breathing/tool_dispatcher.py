@@ -46,6 +46,9 @@ def extract_sensor_state(mmwave_result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(latest, dict):
             state["closest_target_r"] = latest.get("r")
             state["closest_target_bearing"] = latest.get("bearing")
+        recent = scan.get("recent_targets")
+        if isinstance(recent, list):
+            state["targets"] = recent
         light_summary = scan.get("light_summary")
         if isinstance(light_summary, dict):
             state["lux"] = light_summary.get("latest_lux")
