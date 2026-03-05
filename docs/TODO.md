@@ -16,11 +16,9 @@ See `docs/20260223_roadmap.md` > Aspirational (beyond v0.4) for future direction
 
 ### Development Decisions
 
-- handleDecodedPacket() buffer validation already sufficient: exact length check + per-command payload validation (2026-02-23)
+- handleDecodedPacket() buffer validation already sufficient: exact length check + per-command payload validation — no additional guards needed (2026-02-23)
 - Locked profile pattern: app always uses `_healthy_heartrate_breathing_locked_profile` (2026-02-23)
-- IdlePolicy + LightOrchestrator extracted as first phase of handler decomposition (2026-02-23)
-- Lux extraction paths in env_utils.py verified against mmWave output: all 4 paths (measure/scan x latest_light/light_summary) match (2026-02-24)
-- scipy.signal.resample returns float64 from int16 input; fastrtc's audio_to_int16 only accepts int16/float32 — fixed by casting to float32 after resample in receive() (2026-02-24)
+- scipy.signal.resample returns float64 from int16 input; fastrtc's audio_to_int16 only accepts int16/float32 — must cast to float32 after resample in receive() (2026-02-24)
 - COBS + CRC-16 binary protocol chosen for mmWave: compact, checksummed, no framing ambiguity
 
 ### Recurring Issues & Solutions
