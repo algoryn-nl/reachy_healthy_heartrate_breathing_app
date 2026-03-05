@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from healthy_heartrate_breathing.gradio_personality import PersonalityUI
 from healthy_heartrate_breathing.headless_personality import (
     _write_profile,
     available_tools_for,
@@ -69,23 +68,3 @@ class TestHeadlessPathTraversal:
         monkeypatch.setattr(hp, "_profiles_root", lambda: tmp_path)
         _write_profile("safe_name", "instr", "tools", "cedar")
         assert (tmp_path / "user_personalities" / "safe_name" / "instructions.txt").exists()
-
-
-class TestGradioPathTraversal:
-    @pytest.fixture
-    def ui(self) -> PersonalityUI:
-        return PersonalityUI()
-
-    @pytest.mark.parametrize("payload", TRAVERSAL_PAYLOADS)
-    def test_resolve_profile_dir_rejects_traversal(self, ui: PersonalityUI, payload: str) -> None:
-        with pytest.raises(ValueError, match="Invalid profile path"):
-            ui._resolve_profile_dir(payload)
-
-    def test_resolve_profile_dir_allows_valid_profile(self, ui: PersonalityUI) -> None:
-        result = ui._resolve_profile_dir("_healthy_heartrate_breathing_locked_profile")
-        assert result.name == "_healthy_heartrate_breathing_locked_profile"
-
-    @pytest.mark.parametrize("payload", TRAVERSAL_PAYLOADS)
-    def test_read_instructions_rejects_traversal(self, ui: PersonalityUI, payload: str) -> None:
-        result = ui._read_instructions_for(payload)
-        assert "Could not load instructions" in result or "Invalid profile path" in result

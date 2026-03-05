@@ -166,8 +166,6 @@ New components:
 
 User-created personalities are stored under `profiles/user_personalities/<name>/`.
 
-Note: `gradio_personality.py` still exists but is no longer used in Gradio mode (personality editor replaced by sensor dashboard).
-
 ### Movement System (`moves.py`)
 
 - **Primary moves** (dance, emotion, goto, breathing) are mutually exclusive and queued
@@ -317,7 +315,6 @@ src/healthy_heartrate_breathing/
   trend_analyzer.py         -- TrendAnalyzer: stateless trend analysis, anomaly detection
   sensor_ws.py              -- SensorBroadcaster: WebSocket client management and broadcast
   console.py                -- LocalStream: headless bidirectional audio, settings UI, REST endpoints
-  gradio_personality.py     -- PersonalityUI: Gradio components for profile management (unused in Gradio mode; retained for headless)
   headless_personality.py   -- filesystem helpers for headless personality management
   headless_personality_ui.py -- REST endpoints for headless personality management
   moves.py                  -- MovementManager: primary/secondary move system, ~100 Hz control loop
