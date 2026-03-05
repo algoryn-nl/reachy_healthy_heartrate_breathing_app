@@ -368,3 +368,34 @@ class TestToU16ScaledOrNull:
 
     def test_zero(self, lib):
         assert lib.shim_to_u16_scaled_or_null(c_float(0.0), c_float(1000.0)) == 0
+
+
+class TestCmdResetCodec:
+    """Cross-validate CMD_RESET frame encoding between Python and C codec."""
+
+    def test_cmd_reset_frame_cobs_crc_matches_c(self, lib) -> None:
+        """Encode CMD_RESET in Python, decode via C COBS, verify CRC matches."""
+        from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+            CMD_RESET,
+            encode_frame,
+            pack_cmd_reset,
+        )
+
+        frame = encode_frame(CMD_RESET, pack_cmd_reset(), seq=0)
+        encoded = frame[:-1]  # strip 0x00 delimiter
+
+        # COBS decode via C
+        in_buf = (c_uint8 * len(encoded))(*encoded)
+        out_buf = (c_uint8 * 256)()
+        out_len = c_size_t(0)
+        ok = lib.shim_cobs_decode(in_buf, len(encoded), out_buf, byref(out_len), 256)
+        assert ok == 1
+
+        # Verify CRC via C
+        decoded_bytes = bytes(out_buf[: out_len.value])
+        data_len = out_len.value - 2
+        data_buf = (c_uint8 * data_len)(*decoded_bytes[:data_len])
+        crc_c = lib.shim_crc16_ccitt_false(data_buf, data_len)
+
+        crc_in_packet = struct.unpack_from("<H", decoded_bytes, data_len)[0]
+        assert crc_c == crc_in_packet
