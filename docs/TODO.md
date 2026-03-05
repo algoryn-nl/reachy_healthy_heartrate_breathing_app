@@ -8,7 +8,7 @@
 
 ### Done (recent)
 
-- [x] **PY-FEAT-1**: Gradio sensor dashboard — replaced personality editor with real-time sensor dashboard: vitals card, radar canvas (top-down targets), vitals history graph (Chart.js + SQLite), WebSocket push via SensorBroadcaster, VitalsStore persistence, chatbot in collapsed accordion; new files: `vitals_store.py`, `sensor_ws.py`, `static/dashboard.js`, `static/dashboard.css`; new endpoints: `/ws/sensor`, `/api/vitals/history`; 487 tests (2026-03-05)
+- [x] **PY-FEAT-1**: Gradio sensor dashboard — replaced personality editor with real-time sensor dashboard: vitals card, radar canvas (top-down targets), vitals history graph (Chart.js + SQLite), WebSocket push via SensorBroadcaster, VitalsStore persistence, chatbot in collapsed accordion; new files: `vitals_store.py`, `sensor_ws.py`, `static/dashboard.js`, `static/dashboard.css`; new endpoints: `/ws/sensor`, `/api/vitals/history`; 490 tests (2026-03-05)
 - [x] **PY-REFACTOR-1**: Reframe BH1750 lux sensor from ambient light to proximity/occlusion — rewrite `light_context.py` (new states: `clear_path`, `close_presence`, `sudden_occlusion`, `partial_occlusion`), simplify `light_orchestrator.py` (remove EMA baseline system, baseline persistence, time-of-day logic), update `openai_realtime.py` constructor, remove `flush()`, update instructions.txt and dashboard label, analytics schema v2 with `PRAGMA user_version` migration, remove 10 obsolete env vars, add `HEALTHY_LIGHT_MODERATE_LUX_THRESHOLD` (2026-03-03)
 
 ### Upcoming — Critical (before next release)
