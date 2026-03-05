@@ -53,7 +53,7 @@
 //   PRESENT_FAR     — someone detected but outside the vitals zone (35–150 cm)
 //   MOVING          — person or robot head is moving (vitals unreliable)
 //   STILL_NEAR      — person in vitals zone, still, but vitals not yet confirmed
-//   RESTING_VITALS  — stable vitals confirmed for VITALS_CONFIRM consecutive frames
+//   RESTING_VITALS  — stable vitals confirmed for VITALS_CONFIRM_MS milliseconds
 //
 // VITALS GATING
 // -------------
@@ -62,7 +62,7 @@
 //   - Robot head not moving (host signals this via CMD_SET_HM)
 //   - Person in the near zone (35–150 cm)
 //   - Both rates within physiological guard rails (HR 35–200, BR 4–30 bpm)
-//   - Rates stable for VITALS_CONFIRM consecutive frames (hysteresis)
+//   - Rates stable for VITALS_CONFIRM_MS milliseconds (hysteresis)
 //   - Cached vitals not older than VITALS_CACHE_EXPIRY_MS (2 seconds)
 //
 // ============================================================================
