@@ -244,6 +244,8 @@ class ToolDispatcher:
         timeout_s: float = 30.0,
         on_sensor_update: Optional[Callable[[dict[str, Any]], None]] = None,
         vitals_append: Optional[Callable[..., None]] = None,
+        trend_analyze: Optional[Callable[[float, float], dict[str, Any] | None]] = None,
+        trend_rollup: Optional[Callable[[], None]] = None,
     ) -> None:
         self._idle_policy = idle_policy
         self._light_orchestrator = light_orchestrator
@@ -258,6 +260,8 @@ class ToolDispatcher:
         self._timeout_s = timeout_s
         self._on_sensor_update = on_sensor_update
         self._vitals_append = vitals_append
+        self._trend_analyze = trend_analyze
+        self._trend_rollup = trend_rollup
         self._semaphore = asyncio.Semaphore(1)
         self._active_task: asyncio.Task[None] | None = None
         self._last_device_state: str | None = None
@@ -444,6 +448,26 @@ class ToolDispatcher:
                         )
                     except Exception:
                         logger.debug("Vitals store append failed", exc_info=True)
+
+                # Trend analysis: inject insight if notable
+                if self._trend_analyze is not None:
+                    hr = new_sensor.get("heart_rate_bpm")
+                    br = new_sensor.get("breath_rate_bpm")
+                    if hr is not None and br is not None:
+                        try:
+                            insight = self._trend_analyze(hr, br)
+                            if insight is not None:
+                                tool_result["trend_insight"] = insight
+                                logger.info("Trend insight injected: %s", insight.get("category"))
+                        except Exception:
+                            logger.debug("Trend analysis failed", exc_info=True)
+
+                # Trigger periodic rollup
+                if self._trend_rollup is not None:
+                    try:
+                        self._trend_rollup()
+                    except Exception:
+                        logger.debug("Trend rollup failed", exc_info=True)
             except Exception:
                 logger.debug("Sensor state update failed", exc_info=True)
 

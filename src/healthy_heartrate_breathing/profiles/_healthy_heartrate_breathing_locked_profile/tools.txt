@@ -18,3 +18,4 @@ stop_emotion
 mmWave
 light_context
 sweep_look
+vitals_trends

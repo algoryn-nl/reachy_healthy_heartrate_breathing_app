@@ -7,7 +7,7 @@ import time
 import asyncio
 from typing import Any
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import Mock, AsyncMock, MagicMock
 from collections.abc import Callable
 
 import pytest
@@ -425,7 +425,9 @@ class TestMultiTargetRouting:
         assert policy.consecutive_misses == 0
 
     @pytest.mark.asyncio
-    async def test_single_target_still_calls_record_target_found(self, dispatcher_factory, idle_policy_factory) -> None:
+    async def test_single_target_still_calls_record_target_found(
+        self, dispatcher_factory, idle_policy_factory
+    ) -> None:
         """When max_target_count == 1, record_target_found is still called."""
         policy = idle_policy_factory()
         result = {
@@ -774,49 +776,59 @@ class TestExtractSensorStateMalformed:
         assert isinstance(state["error"], str)
 
     def test_extra_unexpected_keys_ignored(self) -> None:
-        state = extract_sensor_state({
-            "scan": {"device_state": "MOVING"},
-            "unexpected_key": [1, 2, 3],
-            "another": {"nested": True},
-            "status": "ok",
-        })
+        state = extract_sensor_state(
+            {
+                "scan": {"device_state": "MOVING"},
+                "unexpected_key": [1, 2, 3],
+                "another": {"nested": True},
+                "status": "ok",
+            }
+        )
         assert state["device_state"] == "MOVING"
         assert state["status"] == "ok"
         assert "unexpected_key" not in state
 
     def test_nested_nulls_in_scan(self) -> None:
-        state = extract_sensor_state({
-            "scan": {
-                "device_state": None,
-                "max_target_count": None,
-                "targets_truncated": None,
-                "latest_target": None,
-                "light_summary": None,
-            },
-        })
+        state = extract_sensor_state(
+            {
+                "scan": {
+                    "device_state": None,
+                    "max_target_count": None,
+                    "targets_truncated": None,
+                    "latest_target": None,
+                    "light_summary": None,
+                },
+            }
+        )
         assert state.get("device_state") is None
         assert state.get("target_count") is None
         assert state.get("targets_truncated") is False
 
     def test_measure_device_state_none_does_not_override_scan(self) -> None:
-        state = extract_sensor_state({
-            "scan": {"device_state": "MOVING"},
-            "measure": {"device_state": None},
-        })
+        state = extract_sensor_state(
+            {
+                "scan": {"device_state": "MOVING"},
+                "measure": {"device_state": None},
+            }
+        )
         assert state["device_state"] == "MOVING"
 
     def test_measure_device_state_overrides_scan(self) -> None:
-        state = extract_sensor_state({
-            "scan": {"device_state": "MOVING"},
-            "measure": {"device_state": "RESTING_VITALS"},
-        })
+        state = extract_sensor_state(
+            {
+                "scan": {"device_state": "MOVING"},
+                "measure": {"device_state": "RESTING_VITALS"},
+            }
+        )
         assert state["device_state"] == "RESTING_VITALS"
 
     def test_measure_lux_overrides_scan_lux(self) -> None:
-        state = extract_sensor_state({
-            "scan": {"light_summary": {"latest_lux": 100.0}},
-            "measure": {"light_summary": {"latest_lux": 50.0}},
-        })
+        state = extract_sensor_state(
+            {
+                "scan": {"light_summary": {"latest_lux": 100.0}},
+                "measure": {"light_summary": {"latest_lux": 50.0}},
+            }
+        )
         assert state["lux"] == 50.0
 
     def test_scan_empty_dict(self) -> None:
@@ -914,3 +926,133 @@ class TestExtractSensorStateTargets:
         assert "targets" in state
         assert len(state["targets"]) == 2
         assert state["targets"][0]["x"] == 0.5
+
+
+class TestTrendInsightInjection:
+    @pytest.mark.asyncio
+    async def test_trend_insight_injected_when_notable(self, dispatcher_factory) -> None:
+        """When trend_analyze returns an insight, it appears in the tool result sent back."""
+        insight_dict = {
+            "category": "elevated_hr",
+            "message": "Your heart rate is notably high",
+            "severity": "attention",
+            "current_value": 105.0,
+            "baseline_mean": 72.0,
+            "baseline_stddev": 3.5,
+        }
+
+        result = {
+            "scan": {
+                "device_state": "RESTING_VITALS",
+                "latest_target": {"x": 1.0, "y": 0.5, "r": 0.8},
+                "max_target_count": 1,
+            },
+            "measure": {
+                "device_state": "RESTING_VITALS",
+                "valid_bio": {"heart_rate_bpm": 105.0, "breath_rate_bpm": 16.0},
+                "success": True,
+            },
+            "status": "ok",
+        }
+
+        dispatch = AsyncMock(return_value=result)
+        send_result = AsyncMock()
+        d = dispatcher_factory(
+            dispatch_tool=dispatch,
+            send_tool_result=send_result,
+            on_sensor_update=lambda s: None,
+            trend_analyze=lambda hr, br: insight_dict,
+            trend_rollup=Mock(),
+        )
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="c1", is_idle=False)
+
+        # The sent tool result should include trend_insight
+        sent_json = send_result.call_args[0][1]
+        sent = json.loads(sent_json)
+        assert "trend_insight" in sent
+        assert sent["trend_insight"]["category"] == "elevated_hr"
+
+    @pytest.mark.asyncio
+    async def test_no_trend_insight_when_none(self, dispatcher_factory) -> None:
+        result = {
+            "scan": {
+                "device_state": "RESTING_VITALS",
+                "latest_target": {"x": 1.0, "y": 0.5, "r": 0.8},
+                "max_target_count": 1,
+            },
+            "measure": {
+                "device_state": "RESTING_VITALS",
+                "valid_bio": {"heart_rate_bpm": 72.0, "breath_rate_bpm": 16.0},
+                "success": True,
+            },
+            "status": "ok",
+        }
+
+        dispatch = AsyncMock(return_value=result)
+        send_result = AsyncMock()
+        d = dispatcher_factory(
+            dispatch_tool=dispatch,
+            send_tool_result=send_result,
+            on_sensor_update=lambda s: None,
+            trend_analyze=lambda hr, br: None,
+            trend_rollup=Mock(),
+        )
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="c1", is_idle=False)
+
+        sent_json = send_result.call_args[0][1]
+        sent = json.loads(sent_json)
+        assert "trend_insight" not in sent
+
+    @pytest.mark.asyncio
+    async def test_rollup_called_after_mmwave(self, dispatcher_factory) -> None:
+        result = {
+            "scan": {"device_state": "NO_TARGET", "max_target_count": 0},
+            "status": "ok",
+        }
+        dispatch = AsyncMock(return_value=result)
+        mock_rollup = Mock()
+        d = dispatcher_factory(
+            dispatch_tool=dispatch,
+            on_sensor_update=lambda s: None,
+            trend_rollup=mock_rollup,
+        )
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="c1", is_idle=False)
+
+        mock_rollup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_trend_analyze_exception_handled(self, dispatcher_factory) -> None:
+        """If trend_analyze raises, it should not crash the dispatch."""
+        result = {
+            "scan": {
+                "device_state": "RESTING_VITALS",
+                "latest_target": {"x": 1.0, "y": 0.5, "r": 0.8},
+                "max_target_count": 1,
+            },
+            "measure": {
+                "device_state": "RESTING_VITALS",
+                "valid_bio": {"heart_rate_bpm": 72.0, "breath_rate_bpm": 16.0},
+                "success": True,
+            },
+            "status": "ok",
+        }
+        dispatch = AsyncMock(return_value=result)
+        send_result = AsyncMock()
+
+        def bad_analyze(hr: float, br: float) -> None:
+            raise RuntimeError("boom")
+
+        d = dispatcher_factory(
+            dispatch_tool=dispatch,
+            send_tool_result=send_result,
+            on_sensor_update=lambda s: None,
+            trend_analyze=bad_analyze,
+        )
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="c1", is_idle=False)
+
+        # Should still send result (no crash)
+        send_result.assert_called_once()

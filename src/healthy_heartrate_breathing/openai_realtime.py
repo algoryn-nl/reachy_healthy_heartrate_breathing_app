@@ -138,6 +138,28 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         )
         logger.info("Vitals store: db_path=%s", self.vitals_store._db_path)
 
+        # Vitals aggregator (hourly/daily rollup from raw readings)
+        from healthy_heartrate_breathing.vitals_aggregator import VitalsAggregator
+
+        self.vitals_aggregator = VitalsAggregator(
+            db_path=self._resolve_runtime_data_path("vitals_history.db"),
+            hourly_retention_days=env_int("HEALTHY_VITALS_HOURLY_RETENTION_DAYS", 30, min_value=1),
+            daily_retention_days=env_int("HEALTHY_VITALS_DAILY_RETENTION_DAYS", 90, min_value=1),
+        )
+
+        # Trend analyzer (anomaly detection, summaries)
+        from healthy_heartrate_breathing.trend_analyzer import TrendAnalyzer
+
+        self.trend_analyzer = TrendAnalyzer(
+            db_path=self._resolve_runtime_data_path("vitals_history.db"),
+            deviation_threshold=env_float("HEALTHY_TREND_DEVIATION_THRESHOLD", 1.5, min_value=0.1),
+            hr_high=env_float("HEALTHY_TREND_HR_HIGH", 100.0, min_value=50.0),
+            hr_low=env_float("HEALTHY_TREND_HR_LOW", 45.0, min_value=20.0),
+            br_high=env_float("HEALTHY_TREND_BR_HIGH", 25.0, min_value=10.0),
+            br_low=env_float("HEALTHY_TREND_BR_LOW", 6.0, min_value=1.0),
+            cooldown_s=env_float("HEALTHY_TREND_COOLDOWN_S", 900.0, min_value=0.0),
+        )
+
         self.light_orchestrator = LightOrchestrator(
             enabled=env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True),
             analytics_enabled=env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True),
@@ -166,6 +188,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         self.sensor_state.clear()
         self.sensor_state.update(state)
         self.sensor_broadcaster.broadcast(state)
+
+    def _analyze_trend(self, hr: float, br: float) -> dict[str, Any] | None:
+        """Analyze trend and return insight dict or None."""
+        from dataclasses import asdict
+
+        insight = self.trend_analyzer.analyze_session(current_hr=hr, current_br=br)
+        if insight is None:
+            return None
+        return asdict(insight)
 
     def _touch_activity(self) -> None:
         """Update the last activity timestamp."""
@@ -413,6 +444,8 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 timeout_s=env_float("HEALTHY_TOOL_DISPATCH_TIMEOUT_S", 30.0, min_value=1.0),
                 on_sensor_update=self._replace_sensor_state,
                 vitals_append=self.vitals_store.append,
+                trend_analyze=self._analyze_trend,
+                trend_rollup=self.vitals_aggregator.rollup,
             )
             self._dispatcher = dispatcher
 
