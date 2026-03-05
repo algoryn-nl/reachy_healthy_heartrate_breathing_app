@@ -41,15 +41,13 @@ Serial port resolution order: explicit parameter, `MMWAVE_SERIAL_PORT` env var, 
 
 Protocol version handshake: at session start, `_handshake_version()` sends `CMD_PING` and validates the first response frame's version byte, returning `status: "version_mismatch"` on mismatch or timeout. Defense-in-depth: mismatched frames are also drop-and-warned in the main polling loop.
 
-### 3. Ambient Light Context
+### 3. Proximity / Occlusion Context
 
-Classifies ambient environment based on lux level, time of day, and user preferences. Outputs a `context_state` and `recommended_mode` the conversation model uses to adapt tone.
+The BH1750 lux sensor sits behind/below the person — when someone sits down, their body occludes the sensor and lux drops. This is used as a proximity signal, not an ambient light measurement.
 
-Context states (in precedence order): `unexpected_darkening`, `night_wind_down`, `intentional_dim_work`, `prolonged_low_light_strain_risk`, `bright_active`, `neutral`, `lux_missing`.
+Context states: `clear_path`, `close_presence`, `sudden_occlusion`, `partial_occlusion` (+ `neutral` when lux missing). Auto-invoked after mmWave returns lux data via `LightOrchestrator`.
 
-Per-user rolling lux baseline using exponential moving average per hour-of-day, persisted to JSON. Auto-invoked after mmWave returns lux data.
-
-Default thresholds: low lux 40, bright lux 250, sharp drop 80 lux in 60 s, prolonged low-light 45 min. All configurable via `HEALTHY_LIGHT_*` env vars.
+Default thresholds: low lux 40 (close proximity), moderate lux 120 (partial occlusion), sharp drop 60 lux in 60s (sudden occlusion). All configurable via `HEALTHY_LIGHT_*` env vars. SQLite analytics storage with time-based retention (default 90 days).
 
 ### 4. Idle Scanning Policy
 
@@ -84,14 +82,52 @@ Calm periodic mmWave probing when the robot is idle:
   - Integrates idle policy (mmWave probe overrides) and auto light-context orchestration
 - External tools/profiles via `REACHY_MINI_EXTERNAL_*_DIRECTORY` env vars with collision detection
 
-Current profile tools: `dance`, `stop_dance`, `play_emotion`, `stop_emotion`, `mmWave`, `light_context`, `sweep_look`.
+Current profile tools: `dance`, `stop_dance`, `play_emotion`, `stop_emotion`, `mmWave`, `light_context`, `sweep_look`, `vitals_trends`, `camera`, `move_head`, `head_tracking`, `do_nothing`.
 
 ### 7. UI Modes
 
 - **Gradio web UI**: `healthy-heartrate-breathing --gradio` at `http://127.0.0.1:7860/`
+  - **Sensor dashboard**: live vitals card (HR, BR, device state, target count, lux), radar canvas (top-down target view with range rings), vitals history chart (Chart.js rolling graph), trends panel (7-day averages, stats cards, recent insights)
+  - Real-time updates via WebSocket (`/ws/sensor`), history via REST (`/api/vitals/history`, `/api/vitals/trends`)
+  - Chatbot in collapsed accordion at bottom
 - **Headless console**: `healthy-heartrate-breathing` (default)
-  - Settings page includes a **sensor dashboard** panel showing person state, target count, truncation warnings, heart rate, breathing rate, and ambient lux — updated via `GET /sensor` polling (3 s interval)
+  - Settings page includes a **sensor dashboard** panel showing person state, target count, truncation warnings, heart rate, breathing rate, and lux — updated via `GET /sensor` polling (3 s interval)
 - Both support `--debug` for verbose logging
+
+### 8. Handler Architecture
+
+The realtime session (`_run_realtime_session()`) is decomposed into five handler classes, each receiving closures via callback injection:
+
+| Handler | Responsibility |
+|---------|----------------|
+| `AudioRouter` | Decode base64 audio deltas, feed HeadWobbler, enqueue output |
+| `IdlePolicy` | Idle detection state machine, mmWave probe scheduling, multi-target aware |
+| `ToolDispatcher` | Non-blocking tool dispatch (asyncio.create_task + Semaphore(1) + timeout), sensor state extraction, trend insight injection |
+| `TranscriptHandler` | Partial transcript debouncing and completed transcript routing |
+| `LightOrchestrator` | Auto light_context dispatch after mmWave, lux delta tracking, analytics |
+
+`HeadWobbler` runs in its own thread, converting audio amplitude to head pitch/yaw offsets.
+
+### 9. Health Trend Analysis
+
+Long-term vitals storage with trend detection and wellness insights.
+
+**Two-tier aggregation** (same SQLite DB as VitalsStore):
+- Raw readings: 4h rolling window (unchanged)
+- Hourly aggregates: 30-day retention (avg/min/max HR, BR, lux, dominant state, resting minutes)
+- Daily aggregates: 90-day retention (same schema, keyed by day)
+
+**Anomaly detection** (either gate triggers):
+1. Statistical: session avg > 1.5 stddev from 7-day rolling mean
+2. Absolute: HR > 100 or < 45, BR > 25 or < 6
+
+**Delivery**:
+- Passive: trend insights injected into mmWave tool results for LLM to mention conversationally
+- On-demand: `vitals_trends` tool returns 7-day summary when user asks
+- Dashboard: trends panel with daily bar chart, stats cards, recent insights list
+- Cooldown: 15 min between spoken insights (configurable)
+
+All thresholds configurable via `HEALTHY_TREND_*` and `HEALTHY_VITALS_*` env vars.
 
 ## Hardware Requirements
 
