@@ -20,6 +20,20 @@ A wellness-aware conversation app for the Reachy Mini robot. It uses an mmWave r
 
 Forked from the Reachy Mini conversation app. The original README is in `README_OLD.md`.
 
+## Hardware Requirements
+
+This app requires a custom sensor module connected via USB:
+
+| Component | Link | Purpose |
+|---|---|---|
+| Reachy Mini robot | [pollen-robotics.com](https://www.pollen-robotics.com/reachy-mini/) | Robot host |
+| **Seeed MR60BHA2** | [**Buy on SeeedStudio**](https://www.seeedstudio.com/MR60BHA2-60GHz-mmWave-Sensor-Breathing-and-Heartbeat-Module-p-5945.html) | 60 GHz mmWave radar (heart rate, breathing, presence) |
+| BH1750 | — | Lux sensor for proximity/occlusion (I2C, `0x23`) |
+| Seeed XIAO ESP32 | [seeedstudio.com](https://www.seeedstudio.com/Seeed-XIAO-ESP32S3-p-5627.html) | Microcontroller driving both sensors |
+| USB cable | — | CDC serial at 115 200 baud to robot host |
+
+Firmware source: `hardware/arduino/reachy-sensor/`. Protocol docs: [`hardware/README.md`](hardware/README.md).
+
 ## Sensor Overview
 
 ### mmWave Radar (`mmWave` tool)

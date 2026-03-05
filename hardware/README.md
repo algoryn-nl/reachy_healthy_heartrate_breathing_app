@@ -1,5 +1,7 @@
 # MR60BHA2 Reachy Firmware Binary Protocol (MMWAVE_PROTO_V1)
 
+The core radar module is the [**Seeed MR60BHA2** 60 GHz mmWave Breathing and Heartbeat Sensor](https://www.seeedstudio.com/MR60BHA2-60GHz-mmWave-Sensor-Breathing-and-Heartbeat-Module-p-5945.html), driven by a [Seeed XIAO ESP32](https://www.seeedstudio.com/Seeed-XIAO-ESP32S3-p-5627.html) microcontroller with a BH1750 lux sensor on I2C.
+
 This firmware now uses a **binary-only** serial protocol for host commands and telemetry.
 
 This is a **breaking switch** from the previous JSON over Serial format:

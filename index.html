@@ -3,18 +3,146 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Healthy Heartrate Breathing</title>
+    <title>Healthy Heartrate Breathing — Reachy Mini App</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <div class="ambient"></div>
     <div class="container">
+
+      <!-- Hero -->
       <header class="hero">
         <div class="pill">Reachy Mini App</div>
         <h1>Healthy Heartrate Breathing</h1>
-        <p class="subtitle">A conversation app for Reachy Mini robot.</p>
+        <p class="subtitle">A wellness-aware conversation app for the <a href="https://www.pollen-robotics.com/reachy-mini/" class="link">Reachy Mini</a> robot. Uses mmWave radar to sense heart rate, breathing rate, and presence — so the robot can respond to how you're actually doing.</p>
       </header>
 
+      <!-- Video -->
+      <div class="video-wrap">
+        <a href="https://youtu.be/HkTQhnZpP7Q" target="_blank" rel="noopener">
+          <img src="https://img.youtube.com/vi/HkTQhnZpP7Q/maxresdefault.jpg"
+               alt="Watch the demo video — Reachy Mini with mmWave heart rate sensor"
+               class="video-thumb" />
+          <div class="play-btn" aria-hidden="true">&#9654;</div>
+        </a>
+      </div>
+
+      <!-- What it does -->
+      <div class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Overview</p>
+            <h2>What It Does</h2>
+          </div>
+        </div>
+        <ul class="feature-list">
+          <li>
+            <span class="feature-icon">&#128172;</span>
+            <div>
+              <strong>Voice Conversations</strong>
+              <p class="muted">Real-time audio via the OpenAI Realtime API — the robot listens, speaks, and reacts with expressive head motion.</p>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon">&#128147;</span>
+            <div>
+              <strong>Heart Rate &amp; Breathing</strong>
+              <p class="muted">A 60 GHz mmWave radar measures heart rate and breathing rate without any wearable — contactless, from up to 1.5 m away.</p>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon">&#128065;</span>
+            <div>
+              <strong>Presence Detection</strong>
+              <p class="muted">Detects up to 8 people in the room with position, range, and bearing. Knows when someone sits down, moves away, or is resting still.</p>
+            </div>
+          </li>
+          <li>
+            <span class="feature-icon">&#128161;</span>
+            <div>
+              <strong>Proximity Sensing</strong>
+              <p class="muted">A lux sensor detects body occlusion — when someone is close, the robot adapts its conversational style accordingly.</p>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- How it works -->
+      <div class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Architecture</p>
+            <h2>How It Works</h2>
+          </div>
+        </div>
+        <div class="diagram">
+          <div class="diagram-row">
+            <div class="diagram-node">
+              <span class="node-label">OpenAI Realtime API</span>
+              <span class="node-desc">Voice &amp; conversation</span>
+            </div>
+            <div class="diagram-arrow">&#8594;</div>
+            <div class="diagram-node highlight">
+              <span class="node-label">Reachy Mini</span>
+              <span class="node-desc">Robot host</span>
+            </div>
+            <div class="diagram-arrow">&#8592;</div>
+            <div class="diagram-node">
+              <span class="node-label">mmWave Sensor</span>
+              <span class="node-desc">USB serial</span>
+            </div>
+          </div>
+        </div>
+        <p class="muted" style="margin-top: 12px;">The app runs on the Reachy Mini. It streams audio to OpenAI for conversation, reads radar and lux data over USB serial from the sensor module, and fuses everything into context-aware robot behavior — dances, expressions, head tracking, and health-aware dialogue.</p>
+      </div>
+
+      <!-- Hardware -->
+      <div class="panel" id="hardware">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Required Hardware</p>
+            <h2>mmWave Sensor Module</h2>
+          </div>
+        </div>
+        <p class="muted">This app requires a custom sensor assembly connected to the Reachy Mini via USB. The core component is the Seeed MR60BHA2 mmWave radar module.</p>
+
+        <div class="hardware-card">
+          <div class="hardware-info">
+            <h3>Seeed MR60BHA2</h3>
+            <p class="muted">60 GHz mmWave Breathing and Heartbeat Sensor</p>
+            <ul class="spec-list">
+              <li><span class="spec-label">Frequency</span> 60 GHz FMCW</li>
+              <li><span class="spec-label">Range</span> up to 1.5 m for vitals</li>
+              <li><span class="spec-label">Measures</span> heart rate, breathing rate, presence, motion</li>
+              <li><span class="spec-label">Interface</span> UART (via XIAO microcontroller)</li>
+            </ul>
+            <a href="https://www.seeedstudio.com/MR60BHA2-60GHz-mmWave-Sensor-Breathing-and-Heartbeat-Module-p-5945.html"
+               class="btn" target="_blank" rel="noopener">
+              Buy on SeeedStudio &rarr;
+            </a>
+          </div>
+        </div>
+
+        <h3 style="margin-top: 20px;">Full Assembly</h3>
+        <table class="hw-table">
+          <thead>
+            <tr><th>Component</th><th>Purpose</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><a href="https://www.pollen-robotics.com/reachy-mini/" class="link">Reachy Mini robot</a></td><td>Robot host (SDK auto-detects hardware vs simulator)</td></tr>
+            <tr><td><a href="https://www.seeedstudio.com/MR60BHA2-60GHz-mmWave-Sensor-Breathing-and-Heartbeat-Module-p-5945.html" class="link">Seeed MR60BHA2</a></td><td>60 GHz mmWave radar (heart rate, breathing, presence)</td></tr>
+            <tr><td>BH1750</td><td>Lux sensor for proximity/occlusion detection (I2C)</td></tr>
+            <tr><td><a href="https://www.seeedstudio.com/Seeed-XIAO-ESP32S3-p-5627.html" class="link">Seeed XIAO ESP32</a></td><td>Microcontroller driving both sensors (custom firmware)</td></tr>
+            <tr><td>USB cable</td><td>CDC serial at 115 200 baud to robot host</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top: 8px;">The firmware source is included in this repository under <code>hardware/arduino/reachy-sensor/</code>. See the <a href="hardware/README.md" class="link">binary protocol docs</a> for details.</p>
+      </div>
+
+      <!-- Getting started -->
       <div class="panel">
         <div class="panel-heading">
           <div>
@@ -22,21 +150,42 @@
             <h2>Installation</h2>
           </div>
         </div>
-        <p class="muted">Install this app on your Reachy Mini using the app store, or run it locally:</p>
+        <p class="muted">Install from the Reachy Mini app store, or run locally:</p>
         <pre><code>uv sync
-reachy-mini-daemon --sim  # in another terminal
-python -m healthy_heartrate_breathing</code></pre>
+reachy-mini-daemon --sim          # in another terminal
+healthy-heartrate-breathing       # headless console mode
+healthy-heartrate-breathing --gradio  # or web UI</code></pre>
+        <p class="muted" style="margin-top: 12px;">Requires an <strong>OpenAI API key</strong> for voice conversations. Set it via the web interface or <code>OPENAI_API_KEY</code> environment variable.</p>
       </div>
 
+      <!-- Configuration -->
       <div class="panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">Configuration</p>
-            <h2>OpenAI API Key</h2>
+            <h2>Key Settings</h2>
           </div>
         </div>
-        <p class="muted">This app requires an OpenAI API key for voice conversations. Set it via the web interface or environment variable.</p>
+        <table class="hw-table">
+          <thead>
+            <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>OPENAI_API_KEY</code></td><td>&#8212;</td><td>Required for voice conversations</td></tr>
+            <tr><td><code>MMWAVE_SERIAL_PORT</code></td><td>auto</td><td>Override serial port for sensor</td></tr>
+            <tr><td><code>HEALTHY_DISABLED_TOOLS</code></td><td>&#8212;</td><td>Comma-separated tools to disable</td></tr>
+            <tr><td><code>HEALTHY_TOOL_DISPATCH_TIMEOUT_S</code></td><td>30</td><td>Max seconds per tool call</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top: 8px;">See the <a href="https://github.com/Algoryn/healthy-heartrate-breathing#configuration" class="link">full configuration reference</a> for all environment variables.</p>
       </div>
+
+      <!-- Footer -->
+      <footer class="footer">
+        <p>Built for <a href="https://www.pollen-robotics.com/reachy-mini/" class="link">Reachy Mini</a> by <a href="https://github.com/Algoryn" class="link">Tom Mulder</a></p>
+        <p class="muted">Forked from the <a href="https://huggingface.co/spaces/pollen-robotics/reachy-mini-conversation-app" class="link">Reachy Mini Conversation App</a></p>
+      </footer>
+
     </div>
   </body>
 </html>
