@@ -13,8 +13,10 @@
 //
 // The firmware processes raw sensor data into a higher-level "person state"
 // (nobody here, someone far away, someone sitting still with good vitals, etc.)
-// and sends periodic telemetry events to the host. The host can also send
-// commands to tune behavior (e.g. "the robot's head is moving, suppress vitals").
+// and sends periodic telemetry events to the host. A fixed 10 Hz state machine
+// tick ensures predictable transitions independent of the radar's frame rate.
+// The host can also send commands to tune behavior (e.g. "the robot's head is
+// moving, suppress vitals").
 //
 // HARDWARE WIRING
 // ---------------
@@ -263,21 +265,18 @@ static const float HR_ABS_MIN = 20.0f, HR_ABS_MAX = 300.0f;
 //
 // ABSENT_HOLD_MS: after losing all presence signals, keep reporting "present"
 //   for this many milliseconds (covers brief radar dropouts).
-// ABSENT_CONFIRM: additionally require this many consecutive "absent" frames
-//   before transitioning to NO_TARGET.
 static const uint32_t ABSENT_HOLD_MS = 1200;
-static const uint8_t ABSENT_CONFIRM = 8;
 
-// VITALS_CONFIRM: number of consecutive frames where both heart rate AND
-//   breathing rate are valid before we transition to RESTING_VITALS and
-//   start emitting vitals to the host. Prevents reporting transient spikes.
-static const uint8_t VITALS_CONFIRM = 2;
+// VITALS_CONFIRM_MS: wall-clock duration (ms) where both heart rate AND
+//   breathing rate must be continuously valid before we transition to
+//   RESTING_VITALS. Prevents reporting transient spikes.
+static const uint32_t VITALS_CONFIRM_MS = 600;           // ~2 frames @ 3 Hz → 600 ms of valid vitals
 
-// HUMAN_STABLE_FALLBACK_CONFIRM: when the radar briefly loses target tracking
-//   (nTargets drops to 0) but still detects a human, this many consecutive
-//   "human detected + head not moving" frames allow vitals to continue.
-//   Covers momentary tracking dropouts without resetting the vitals streak.
-static const uint8_t HUMAN_STABLE_FALLBACK_CONFIRM = 3;
+// STABLE_FALLBACK_MS: when the radar briefly loses target tracking
+//   (nTargets drops to 0) but still detects a human, this wall-clock
+//   duration of "human detected + head not moving" allows vitals to continue.
+//   Covers momentary tracking dropouts without resetting the vitals window.
+static const uint32_t STABLE_FALLBACK_MS = 1000;          // ~3 frames @ 3 Hz → 1000 ms of stable human signal
 
 // TARGET_LOSS_GRACE_MS: maximum duration (ms) that the fallback lock remains
 //   active after the last single-target frame. After this, the fallback expires
@@ -302,6 +301,13 @@ static const uint32_t LIGHT_MS_DEFAULT   = 1000;  // ambient light
 // --- Light sensor I2C address and recovery ---
 static const uint8_t BH1750_I2C_ADDR = 0x23;        // ADDR pin LOW (default)
 static const uint32_t LIGHT_RETRY_MS = 10000;        // retry BH1750 init every 10 s on failure
+
+// --- State machine tick rate ---
+// The state machine runs at a fixed wall-clock frequency, independent of
+// radar polling success. This prevents state transitions from freezing
+// when mmWave.update() misses frames.
+static const uint32_t TICK_INTERVAL_MS = 100;  // 10 Hz state machine tick
+static const uint32_t RADAR_STALE_MS  = 1500;  // radar data considered stale after this
 
 // ============================================================================
 // Global state
@@ -330,14 +336,13 @@ struct VitalsCache {
 };
 static VitalsCache vitals;
 
-// Presence detection streaks and timing.
+// Presence detection timing (wall-clock durations, not frame counts).
 struct PresenceState {
-  uint32_t lastMs           = 0;      // last millis() when any presence signal was detected
-  uint8_t  absentStreak     = 0;      // consecutive frames with no presence signal
-  uint8_t  vitalsStreak     = 0;      // consecutive frames with valid vitals (both HR and BR)
-  uint8_t  humanStableStreak = 0;     // consecutive frames with human detected + head still
-  uint32_t lastSingleTargetMs = 0;    // last millis() when exactly 1 target was seen
-  bool     seenSingleTarget = false;  // true once we've seen at least one single-target frame
+  uint32_t lastMs              = 0;     // last millis() when any presence signal was detected
+  uint32_t vitalsValidSinceMs  = 0;     // 0 = not valid; >0 = millis() when validity started
+  uint32_t humanStableSinceMs  = 0;     // 0 = not stable; >0 = millis() when stability started
+  uint32_t lastSingleTargetMs  = 0;     // last millis() when exactly 1 target was seen
+  bool     seenSingleTarget    = false; // true once we've seen at least one single-target frame
 };
 static PresenceState presence;
 
@@ -385,6 +390,27 @@ struct PrevState {
   int         n  = -1;     // target count
 };
 static PrevState prev;
+
+// Buffered sensor readings. The poll phase writes this every iteration;
+// the tick phase reads it at a fixed 10 Hz rate. This decouples the
+// state machine from the radar's variable frame rate.
+struct SensorSnapshot {
+  uint32_t   radarMs       = 0;      // millis() of last successful mmWave.update()
+  bool       humanDetected = false;
+  uint8_t    nTargets      = 0;
+  PeopleCounting targetInfo;          // full target array from radar
+  FocusTarget focus;                  // picked target for vitals
+  float      dist_cm       = NAN;
+  float      breathRate    = NAN;
+  float      heartRate     = NAN;
+  bool       dist_ok       = false;
+  bool       br_ok         = false;
+  bool       hr_ok         = false;
+  bool       radarFresh    = false;   // true when poll produced new data; cleared after tick
+};
+static SensorSnapshot snap;
+
+static uint32_t lastTickMs = 0;  // millis() of last state machine tick
 
 // --- Serial protocol buffers ---
 // COBS encoding expands data by at most 1 byte per 254, plus a delimiter.
