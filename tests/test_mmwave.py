@@ -14,35 +14,35 @@ from healthy_heartrate_breathing.tool_dispatcher import extract_sensor_state
 from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave import MmWave
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    ACK_OK,
     EVT_ACK,
     EVT_BIO,
     EVT_ERR,
     CMD_PING,
     EVT_DIAG,
     EVT_PONG,
+    CMD_RESET,
     EVT_HELLO,
     EVT_LIGHT,
     EVT_STATE,
     CMD_SET_HM,
-    ACK_OK,
     ERR_BAD_LEN,
-    ERR_RADAR_INIT_FAIL,
     EVT_TARGETS,
     CMD_SET_FOCUS,
     PROTO_VERSION,
     CMD_SET_BIO_MS,
     FEAT_LIGHT_SENSOR,
     CMD_SET_TARGETS_MS,
-    CMD_RESET,
     CMD_SET_GUARD_RAILS,
+    ERR_RADAR_INIT_FAIL,
     ProtocolError,
     cobs_encode,
     decode_event,
     decode_frame,
     encode_frame,
+    pack_cmd_reset,
     crc16_ccitt_false,
     extract_encoded_frames,
-    pack_cmd_reset,
     pack_cmd_set_guard_rails,
 )
 
@@ -2555,3 +2555,108 @@ class TestCmdResetProtocol:
         assert ev["type"] == "err"
         assert ev["cmd_id"] == CMD_RESET
         assert ev["err_code"] == ERR_RADAR_INIT_FAIL
+
+
+class TestAutoReset:
+    """CMD_RESET auto-recovery based on EVT_DIAG consecutive fail count."""
+
+    @pytest.fixture
+    def mmwave_tool(self) -> MmWave:
+        tool = MmWave()
+        return tool
+
+    def test_initial_consec_fails_is_zero(self, mmwave_tool: MmWave) -> None:
+        assert mmwave_tool._last_consec_fails == 0
+
+    def test_consec_fails_stored_from_diag(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 0
+        mmwave_tool._update_diag_state({"mmwave_consecutive_fails": 15})
+        assert mmwave_tool._last_consec_fails == 15
+
+    def test_consec_fails_cleared_on_reset_success(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 25
+        mmwave_tool._on_reset_success()
+        assert mmwave_tool._last_consec_fails == 0
+
+    def test_should_attempt_reset_below_threshold(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 5
+        assert not mmwave_tool._should_attempt_reset()
+
+    def test_should_attempt_reset_at_threshold(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 20
+        assert mmwave_tool._should_attempt_reset()
+
+    def test_should_attempt_reset_above_threshold(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 50
+        assert mmwave_tool._should_attempt_reset()
+
+    def test_reset_threshold_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HEALTHY_MM_WAVE_RESET_THRESHOLD", "10")
+        tool = MmWave()
+        tool._last_consec_fails = 10
+        assert tool._should_attempt_reset()
+        tool._last_consec_fails = 9
+        assert not tool._should_attempt_reset()
+
+    def test_reset_sent_when_threshold_exceeded(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 25
+        ack_payload = struct.pack("<BBi", CMD_RESET, ACK_OK, 0)
+        ack_frame = encode_frame(EVT_ACK, ack_payload, seq=0)
+
+        from unittest.mock import MagicMock
+
+        mock_ser = MagicMock()
+        mock_ser.read = MagicMock(return_value=ack_frame)
+        mock_ser.in_waiting = len(ack_frame)
+        mock_ser.write = MagicMock()
+        mock_ser.flush = MagicMock()
+
+        tx_state = {"seq": 0}
+        rx_buffer = bytearray()
+        result = mmwave_tool._attempt_radar_reset(mock_ser, tx_state, rx_buffer)
+        assert result is True
+        assert mmwave_tool._last_consec_fails == 0
+
+    def test_reset_not_sent_below_threshold(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 5
+        assert not mmwave_tool._should_attempt_reset()
+
+    def test_reset_failure_does_not_clear_counter(self, mmwave_tool: MmWave) -> None:
+        mmwave_tool._last_consec_fails = 25
+        err_payload = struct.pack("<BB", CMD_RESET, ERR_RADAR_INIT_FAIL)
+        err_frame = encode_frame(EVT_ERR, err_payload, seq=0)
+
+        from unittest.mock import MagicMock
+
+        mock_ser = MagicMock()
+        mock_ser.read = MagicMock(return_value=err_frame)
+        mock_ser.in_waiting = len(err_frame)
+        mock_ser.write = MagicMock()
+        mock_ser.flush = MagicMock()
+
+        tx_state = {"seq": 0}
+        rx_buffer = bytearray()
+        result = mmwave_tool._attempt_radar_reset(mock_ser, tx_state, rx_buffer)
+        assert result is False
+        assert mmwave_tool._last_consec_fails == 25
+
+    def test_reset_timeout_does_not_clear_counter(self, monkeypatch: pytest.MonkeyPatch, mmwave_tool: MmWave) -> None:
+        import healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave as mmwave_mod
+
+        monkeypatch.setattr(mmwave_mod, "HANDSHAKE_TIMEOUT_S", 0.05)
+
+        mmwave_tool._last_consec_fails = 25
+
+        from unittest.mock import MagicMock
+
+        mock_ser = MagicMock()
+        mock_ser.read = MagicMock(return_value=b"")
+        mock_ser.in_waiting = 0
+        mock_ser.write = MagicMock()
+        mock_ser.flush = MagicMock()
+
+        tx_state = {"seq": 0}
+        rx_buffer = bytearray()
+        result = mmwave_tool._attempt_radar_reset(mock_ser, tx_state, rx_buffer)
+        assert result is False
+        assert mmwave_tool._last_consec_fails == 25

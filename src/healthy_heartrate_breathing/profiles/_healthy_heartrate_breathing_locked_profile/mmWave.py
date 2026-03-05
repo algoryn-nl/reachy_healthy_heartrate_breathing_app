@@ -14,7 +14,9 @@ from healthy_heartrate_breathing.env_utils import coerce_ms, coerce_int, coerce_
 from healthy_heartrate_breathing.tools.core_tools import Tool, ToolDependencies, tool_error
 from healthy_heartrate_breathing.dance_emotion_moves import GotoQueueMove
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    ACK_OK,
     CMD_PING,
+    CMD_RESET,
     CMD_SET_HM,
     CMD_SET_FOCUS,
     PROTO_VERSION,
@@ -24,6 +26,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     decode_event,
     decode_frame,
     encode_frame,
+    pack_cmd_reset,
     pack_cmd_set_hm,
     pack_cmd_set_focus,
     pack_cmd_set_bio_ms,
@@ -56,6 +59,58 @@ class MmWave(Tool):
 
     def __init__(self) -> None:  # noqa: D107
         self._warned_version_mismatch = False
+        self._last_consec_fails = 0
+        self._reset_threshold = max(1, coerce_int(
+            os.getenv("HEALTHY_MM_WAVE_RESET_THRESHOLD", "20"), 20,
+        ))
+
+    def _update_diag_state(self, diag: dict[str, Any]) -> None:
+        """Store latest consecutive fail count from EVT_DIAG."""
+        consec = diag.get("mmwave_consecutive_fails")
+        if isinstance(consec, int):
+            self._last_consec_fails = consec
+
+    def _on_reset_success(self) -> None:
+        """Clear stored fail count after successful CMD_RESET."""
+        self._last_consec_fails = 0
+
+    def _should_attempt_reset(self) -> bool:
+        """Check if auto-reset should be attempted."""
+        return self._last_consec_fails >= self._reset_threshold
+
+    def _attempt_radar_reset(
+        self, ser: Any, tx_state: Dict[str, int], rx_buffer: bytearray
+    ) -> bool:
+        """Send CMD_RESET and wait for ACK. Returns True on success."""
+        logger.info(
+            "Attempting radar reset (consecutive_fails=%d, threshold=%d)",
+            self._last_consec_fails,
+            self._reset_threshold,
+        )
+        try:
+            self._send_command(ser, tx_state, CMD_RESET, pack_cmd_reset())
+        except OSError as exc:
+            logger.warning("CMD_RESET write failed: %s", exc)
+            return False
+
+        deadline = time.monotonic() + HANDSHAKE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            try:
+                events = self._poll_events(ser, rx_buffer)
+            except OSError:
+                return False
+            for event in events:
+                if event.get("type") == "ack" and event.get("cmd_id") == CMD_RESET:
+                    if event.get("status_code") == ACK_OK:
+                        logger.info("Radar reset succeeded")
+                        self._on_reset_success()
+                        return True
+                if event.get("type") == "err" and event.get("cmd_id") == CMD_RESET:
+                    logger.warning("Radar reset failed: err_code=%s", event.get("err_code"))
+                    return False
+
+        logger.warning("Radar reset timed out")
+        return False
 
     description = (
         "Locate people with mmWave targets telemetry and measure heart/breath rates "
@@ -541,6 +596,7 @@ class MmWave(Tool):
                 "mmwave_consecutive_fails": latest_diag["mmwave_consecutive_fails"],
                 "tx_drop_count": latest_diag["tx_drop_count"],
             }
+            self._update_diag_state(latest_diag)
         if state["recent_targets"]:
             unique = []
             for target in state["recent_targets"]:
@@ -621,6 +677,7 @@ class MmWave(Tool):
                                 "mmwave_consecutive_fails": latest_diag["mmwave_consecutive_fails"],
                                 "tx_drop_count": latest_diag["tx_drop_count"],
                             }
+                            self._update_diag_state(latest_diag)
                         return result
                 if msg_type == "light":
                     result["light_samples"].append(msg)
@@ -638,6 +695,7 @@ class MmWave(Tool):
                 "mmwave_consecutive_fails": latest_diag["mmwave_consecutive_fails"],
                 "tx_drop_count": latest_diag["tx_drop_count"],
             }
+            self._update_diag_state(latest_diag)
         return result
 
     async def __call__(self, deps: ToolDependencies, **kwargs: Any) -> Dict[str, Any]:
@@ -696,6 +754,9 @@ class MmWave(Tool):
                 if handshake_err is not None:
                     logger.warning("mmWave handshake failed on %s: %s", serial_port, handshake_err)
                     return tool_error(handshake_err, serial_port=serial_port, status="version_mismatch")
+
+                if self._should_attempt_reset():
+                    self._attempt_radar_reset(ser, tx_state, rx_buffer)
 
                 response: Dict[str, Any] = {
                     "serial_port": serial_port,
