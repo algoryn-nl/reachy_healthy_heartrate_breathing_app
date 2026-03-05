@@ -70,7 +70,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 |---------|------|----------------|
 | `AudioRouter` | `audio_router.py` | receive/emit: decode base64 audio deltas, feed head wobbler, enqueue output |
 | `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity; multi-target aware (backs off probing, suggests scan-only when >1 target) (state diagram in module docstring) |
-| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()`; injects `device_context` dict into mmWave results via `build_device_context()` (vitals reliability, state transitions) |
+| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()` (includes `recent_targets` for radar); injects `device_context` dict into mmWave results via `build_device_context()` (vitals reliability, state transitions); appends vitals to `VitalsStore` |
 | `TranscriptHandler` | `transcript_handler.py` | Partial transcript debouncing (configurable delay) and completed transcript output routing |
 | `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data; owns lux delta tracking and analytics |
 
@@ -136,17 +136,33 @@ Prompts library structure (`src/.../prompts/`):
 - `behaviors/` — behavioral instruction fragments (e.g., `silent_robot.txt`)
 - `identities/` — identity fragments (e.g., `basic_info.txt`, `witty_identity.txt`)
 
-### Personality Management
+### Gradio Sensor Dashboard
 
-Two parallel UI systems for managing personalities (profiles):
+When running with `--gradio`, the UI shows a real-time sensor dashboard instead of the old personality editor:
 
-**Gradio mode** (`gradio_personality.py`): `PersonalityUI` class creates Gradio components — dropdown, preview, editor, save/create. Wired to `handler.apply_personality()` for live updates.
+- **Live vitals card**: heart rate, breathing rate, device state, target count, lux — pushed via WebSocket (`/ws/sensor`)
+- **Radar canvas**: HTML5 Canvas top-down view of detected people with range rings (0.5m/1.0m/1.5m), colored dots per target state
+- **Vitals history chart**: Chart.js rolling graph of HR/BR over time, loaded from `/api/vitals/history` REST endpoint + real-time WS updates
+- **Chatbot**: tucked in a collapsed `gr.Accordion` at the bottom
+- **API key input**: kept in header area
+
+Data flow: mmWave tool result → `extract_sensor_state()` → `handler.sensor_state` → `SensorBroadcaster.broadcast()` → WebSocket → dashboard JS. Vitals also persisted to `VitalsStore` (SQLite) for history graphs.
+
+New components:
+- `sensor_ws.py:SensorBroadcaster` — manages WS clients, fire-and-forget broadcast, auto-removes dead clients
+- `vitals_store.py:VitalsStore` — SQLite append-only store with rolling time window pruning (WAL mode, `PRAGMA user_version`)
+- `static/dashboard.js` — WS client, vitals card, radar canvas, Chart.js integration
+- `static/dashboard.css` — dark theme styles for dashboard components
+
+### Personality Management (Headless Mode)
 
 **Headless mode** (`headless_personality.py` + `headless_personality_ui.py`):
 - `headless_personality.py` — filesystem helpers: list/resolve/read/write profiles
 - `headless_personality_ui.py:mount_personality_routes()` — REST API on the settings FastAPI app
 
 User-created personalities are stored under `profiles/user_personalities/<name>/`.
+
+Note: `gradio_personality.py` still exists but is no longer used in Gradio mode (personality editor replaced by sensor dashboard).
 
 ### Movement System (`moves.py`)
 
@@ -237,6 +253,15 @@ The headless settings page (`static/index.html` + `static/main.js` + `static/sty
 
 Data flows: mmWave tool result (including errors) → `extract_sensor_state()` in `tool_dispatcher.py` → `handler.sensor_state` dict (replaced, not merged, to clear stale error keys) → `GET /sensor` REST endpoint in `console.py` → frontend polls every 3 seconds.
 
+### REST/WS API (Gradio Mode)
+
+When running with `--gradio`, these endpoints are mounted on the Gradio ASGI app:
+
+| Endpoint | Type | Purpose |
+|----------|------|---------|
+| `/ws/sensor` | WebSocket | Real-time sensor state push to dashboard clients |
+| `/api/vitals/history` | GET | Vitals history rows (query param: `hours`, max 24) |
+
 ### Light Context System (Proximity/Occlusion)
 
 `light_context.py` is a policy tool that classifies proximity/occlusion context. The BH1750 lux sensor sits behind/below the person — when someone sits down, their body occludes the sensor and lux drops dramatically. This is reframed as a proximity signal, not an ambient light measurement.
@@ -281,8 +306,10 @@ src/healthy_heartrate_breathing/
   tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, sensor state extraction, idle/light policy integration
   transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
   light_orchestrator.py     -- lux delta tracking, auto light_context dispatch, proximity analytics logging
+  vitals_store.py           -- VitalsStore: SQLite append-only vitals history with rolling window pruning
+  sensor_ws.py              -- SensorBroadcaster: WebSocket client management and broadcast
   console.py                -- LocalStream: headless bidirectional audio, settings UI, REST endpoints
-  gradio_personality.py     -- PersonalityUI: Gradio components for profile management
+  gradio_personality.py     -- PersonalityUI: Gradio components for profile management (unused in Gradio mode; retained for headless)
   headless_personality.py   -- filesystem helpers for headless personality management
   headless_personality_ui.py -- REST endpoints for headless personality management
   moves.py                  -- MovementManager: primary/secondary move system, ~100 Hz control loop
@@ -321,6 +348,8 @@ src/healthy_heartrate_breathing/
     index.html              -- headless settings page with sensor dashboard
     main.js                 -- settings page JavaScript
     style.css               -- settings page styles
+    dashboard.js            -- Gradio dashboard: WebSocket client, vitals card, radar canvas, Chart.js
+    dashboard.css           -- Gradio dashboard styles (dark theme)
   images/                   -- avatar images for chatbot UI
 
 tests/
@@ -334,8 +363,10 @@ tests/
   test_light_orchestrator.py -- LightOrchestrator lux delta, dispatch, analytics, schema migration tests
   test_mmwave.py            -- mmWave protocol, tool integration, bio rate boundary conditions, acceptance gate
   test_openai_realtime.py   -- OpenaiRealtimeHandler tests (receive, emit, idle, event loop, shutdown, personality, cost tracking)
-  test_tool_dispatcher.py   -- ToolDispatcher dispatch, timeout, sensor extraction tests
+  test_tool_dispatcher.py   -- ToolDispatcher dispatch, timeout, sensor extraction, vitals append tests
   test_transcript_handler.py -- TranscriptHandler debouncing tests
+  test_vitals_store.py      -- VitalsStore SQLite append, query, prune, schema tests
+  test_sensor_ws.py         -- SensorBroadcaster connect, disconnect, broadcast, dead client tests
   audio/                    -- audio subsystem tests
   vision/                   -- vision subsystem tests
 
@@ -406,6 +437,12 @@ Key configuration (see `.env.example`):
 | `HEALTHY_MM_WAVE_ERROR_BACKOFF_S` | `120.0` | Seconds to wait before retry after error suppression |
 | `HEALTHY_MM_WAVE_MULTI_TARGET_INTERVAL_MULTIPLIER` | `2.0` | Probe interval multiplier when multi-target is active |
 
+### Vitals History (Dashboard)
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEALTHY_VITALS_MAX_HOURS` | `4` | Rolling window for vitals history retention (hours) |
+
 ### Light Context Policy (Proximity/Occlusion)
 
 | Variable | Default | Description |
@@ -440,7 +477,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (477 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, and deterministic async test patterns)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (487 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, and SensorBroadcaster WebSocket tests)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

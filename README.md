@@ -218,3 +218,14 @@ Use the `src/healthy_heartrate_breathing/profiles/_healthy_heartrate_breathing_l
 Also customize:
 - `index.html` -- Hugging Face Spaces landing page
 - `src/healthy_heartrate_breathing/static/index.html` -- web app settings page with sensor dashboard (headless mode)
+
+## Gradio Sensor Dashboard
+
+When running with `--gradio`, the web UI shows a real-time sensor dashboard:
+
+- **Live vitals**: heart rate, breathing rate, device state, target count, proximity — updated in real-time via WebSocket
+- **Radar view**: top-down canvas showing detected people with range rings and colored position dots
+- **Vitals history**: rolling Chart.js graph of HR and BR over the last 2–4 hours (persisted to SQLite)
+- **Conversation log**: chatbot transcript in a collapsed accordion
+
+The dashboard connects via WebSocket (`/ws/sensor`) for instant updates and fetches historical data from `/api/vitals/history`.
