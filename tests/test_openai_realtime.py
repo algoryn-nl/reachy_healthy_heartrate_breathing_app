@@ -147,8 +147,9 @@ async def _run_session_with_events(
     )
     handler.client = client
     await handler._run_realtime_session()
-    # Give background tasks (tool dispatch) a moment to settle
-    await asyncio.sleep(0.05)
+    # Yield to the event loop so any fire-and-forget tasks (tool dispatch) settle.
+    for _ in range(20):
+        await asyncio.sleep(0)
     return conn
 
 
@@ -501,7 +502,9 @@ async def test_connection_cleared_on_restart_failure(monkeypatch: Any) -> None:
     handler = rt_mod.OpenaiRealtimeHandler(deps)
     handler.client = FakeClient()
     await handler._restart_session()
-    await asyncio.sleep(0.1)
+    # Yield to let background cleanup tasks settle.
+    for _ in range(20):
+        await asyncio.sleep(0)
 
     assert handler.connection is None, "connection must be cleaned up after restart failure"
 
@@ -1293,7 +1296,9 @@ class TestRestartSession:
         monkeypatch.setattr(rt_mod, "dispatch_tool_call", AsyncMock(return_value={}))
 
         await handler._restart_session()
-        await asyncio.sleep(0.1)
+        # Yield to let background tasks settle.
+        for _ in range(20):
+            await asyncio.sleep(0)
 
         old_conn.close.assert_called_once()
 

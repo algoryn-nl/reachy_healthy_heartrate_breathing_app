@@ -4,34 +4,42 @@
 from __future__ import annotations
 import json
 import sqlite3
+from typing import Any
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock
+from collections.abc import Callable
 
 import pytest
 
 from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
 
 
-def _orchestrator(tmp_path: Path, **overrides: object) -> LightOrchestrator:
-    defaults = {
-        "enabled": True,
-        "analytics_enabled": False,
-        "user_id": "test-user",
-        "low_lux_threshold": 40.0,
-        "analytics_path": tmp_path / "analytics.db",
-    }
-    defaults.update(overrides)
-    return LightOrchestrator(**defaults)
+@pytest.fixture
+def orchestrator_factory(tmp_path: Path) -> Callable[..., LightOrchestrator]:
+    """Return a factory that builds a LightOrchestrator with sane defaults."""
+
+    def _make(**overrides: Any) -> LightOrchestrator:
+        defaults: dict[str, Any] = {
+            "enabled": True,
+            "analytics_enabled": False,
+            "user_id": "test-user",
+            "low_lux_threshold": 40.0,
+            "analytics_path": tmp_path / "analytics.db",
+        }
+        defaults.update(overrides)
+        return LightOrchestrator(**defaults)
+
+    return _make
 
 
 class TestLuxDelta:
-    def test_no_previous_returns_none(self, tmp_path: Path) -> None:
-        o = _orchestrator(tmp_path)
+    def test_no_previous_returns_none(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
+        o = orchestrator_factory()
         assert o.compute_lux_delta_60s(100.0, now=10.0) is None
 
-    def test_normal_delta(self, tmp_path: Path) -> None:
-        o = _orchestrator(tmp_path)
+    def test_normal_delta(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
+        o = orchestrator_factory()
         o._last_lux = 200.0
         o._last_lux_time = 0.0
         delta = o.compute_lux_delta_60s(100.0, now=30.0)
@@ -39,8 +47,8 @@ class TestLuxDelta:
         assert delta is not None
         assert abs(delta - (-200.0)) < 0.1
 
-    def test_stale_reading_returns_none(self, tmp_path: Path) -> None:
-        o = _orchestrator(tmp_path)
+    def test_stale_reading_returns_none(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
+        o = orchestrator_factory()
         o._last_lux = 200.0
         o._last_lux_time = 0.0
         # 700s gap exceeds 600s max
@@ -50,11 +58,13 @@ class TestLuxDelta:
 class TestAnalyticsPermissions:
     """Verify analytics SQLite writing handles errors gracefully."""
 
-    def test_analytics_write_to_unwritable_dir_does_not_raise(self, tmp_path: Path) -> None:
+    def test_analytics_write_to_unwritable_dir_does_not_raise(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         readonly_dir = tmp_path / "analytics_locked"
         readonly_dir.mkdir()
         analytics_path = readonly_dir / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=analytics_path)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=analytics_path)
 
         # First write should succeed
         o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "clear_path"})
@@ -67,9 +77,11 @@ class TestAnalyticsPermissions:
         conn.close()
         assert len(rows) == 2
 
-    def test_analytics_creates_parent_dirs(self, tmp_path: Path) -> None:
+    def test_analytics_creates_parent_dirs(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         nested_path = tmp_path / "logs" / "deep" / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=nested_path)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=nested_path)
         o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "clear_path"})
         assert nested_path.exists()
         conn = sqlite3.connect(nested_path)
@@ -78,9 +90,11 @@ class TestAnalyticsPermissions:
         assert len(rows) == 1
         assert rows[0][0] == 100.0
 
-    def test_analytics_disabled_no_write(self, tmp_path: Path) -> None:
+    def test_analytics_disabled_no_write(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         analytics_path = tmp_path / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=False, analytics_path=analytics_path)
+        o = orchestrator_factory(analytics_enabled=False, analytics_path=analytics_path)
         o._append_analytics_event(source_tool="test", lux=100.0, result={})
         assert not analytics_path.exists()
 
@@ -88,9 +102,11 @@ class TestAnalyticsPermissions:
 class TestAnalyticsSqlite:
     """Verify analytics SQLite storage, retention, and schema migration."""
 
-    def test_event_inserted_and_queryable(self, tmp_path: Path) -> None:
+    def test_event_inserted_and_queryable(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         db_path = tmp_path / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=db_path)
         o._append_analytics_event(
             source_tool="test",
             lux=142.5,
@@ -122,9 +138,11 @@ class TestAnalyticsSqlite:
         assert rows[0][3] == "low_lux_with_presence"
         assert rows[0][4] == 45.0
 
-    def test_retention_prunes_old_rows(self, tmp_path: Path) -> None:
+    def test_retention_prunes_old_rows(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         db_path = tmp_path / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path, analytics_max_age_days=1)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=db_path, analytics_max_age_days=1)
         # Insert a recent event
         o._append_analytics_event(source_tool="test", lux=100.0, result={"context_state": "clear_path"})
         # Manually insert an old event (200 days ago)
@@ -137,7 +155,7 @@ class TestAnalyticsSqlite:
         conn.commit()
         conn.close()
         # Trigger prune by writing another event (prune runs on init)
-        o2 = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path, analytics_max_age_days=1)
+        o2 = orchestrator_factory(analytics_enabled=True, analytics_path=db_path, analytics_max_age_days=1)
         o2._append_analytics_event(source_tool="test", lux=200.0, result={"context_state": "close_presence"})
         conn = sqlite3.connect(db_path)
         rows = conn.execute("SELECT context_state FROM light_events ORDER BY id").fetchall()
@@ -147,38 +165,46 @@ class TestAnalyticsSqlite:
         assert "clear_path" in states
         assert "close_presence" in states
 
-    def test_db_created_lazily_on_first_write(self, tmp_path: Path) -> None:
+    def test_db_created_lazily_on_first_write(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         db_path = tmp_path / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=db_path)
         assert not db_path.exists()
         o._append_analytics_event(source_tool="test", lux=50.0, result={})
         assert db_path.exists()
 
-    def test_disabled_analytics_no_db(self, tmp_path: Path) -> None:
+    def test_disabled_analytics_no_db(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         db_path = tmp_path / "analytics.db"
-        o = _orchestrator(tmp_path, analytics_enabled=False, analytics_path=db_path)
+        o = orchestrator_factory(analytics_enabled=False, analytics_path=db_path)
         o._append_analytics_event(source_tool="test", lux=100.0, result={})
         assert not db_path.exists()
 
-    def test_db_write_failure_does_not_raise(self, tmp_path: Path) -> None:
+    def test_db_write_failure_does_not_raise(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         # Point analytics_path to a directory (not a file) to force sqlite3 error
         bad_path = tmp_path / "not_a_file"
         bad_path.mkdir()
         db_path = bad_path / "sub" / "analytics.db"
         # Make parent unwritable after creation
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=db_path)
         o._append_analytics_event(source_tool="test", lux=100.0, result={})
         assert db_path.exists()
         bad_path.chmod(0o555)
         try:
             # Write to a new path that can't be created
-            o2 = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=bad_path / "locked" / "analytics.db")
+            o2 = orchestrator_factory(analytics_enabled=True, analytics_path=bad_path / "locked" / "analytics.db")
             o2._append_analytics_event(source_tool="test", lux=200.0, result={})
             # Should not raise
         finally:
             bad_path.chmod(0o755)
 
-    def test_schema_migration_recreates_table(self, tmp_path: Path) -> None:
+    def test_schema_migration_recreates_table(
+        self, tmp_path: Path, orchestrator_factory: Callable[..., LightOrchestrator]
+    ) -> None:
         """If an existing DB has an old schema version, the table is recreated."""
         db_path = tmp_path / "analytics.db"
         # Create a v1 schema manually
@@ -201,7 +227,7 @@ class TestAnalyticsSqlite:
         conn.close()
 
         # Now init with new schema — should drop and recreate
-        o = _orchestrator(tmp_path, analytics_enabled=True, analytics_path=db_path)
+        o = orchestrator_factory(analytics_enabled=True, analytics_path=db_path)
         o._append_analytics_event(
             source_tool="test",
             lux=100.0,
@@ -222,8 +248,8 @@ class TestAnalyticsSqlite:
 
 class TestRunFromMmwave:
     @pytest.mark.asyncio
-    async def test_disabled_returns_none(self, tmp_path: Path) -> None:
-        o = _orchestrator(tmp_path, enabled=False)
+    async def test_disabled_returns_none(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
+        o = orchestrator_factory(enabled=False)
         dispatch = AsyncMock(return_value={})
         result = await o.run_from_mmwave(
             {"measure": {"latest_light": {"lux": 300.0}}},
@@ -235,8 +261,8 @@ class TestRunFromMmwave:
         dispatch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_lux_returns_none(self, tmp_path: Path) -> None:
-        o = _orchestrator(tmp_path)
+    async def test_no_lux_returns_none(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
+        o = orchestrator_factory()
         dispatch = AsyncMock(return_value={})
         result = await o.run_from_mmwave(
             {"measure": {}},
@@ -248,10 +274,10 @@ class TestRunFromMmwave:
         dispatch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_dispatches_light_context(self, tmp_path: Path) -> None:
+    async def test_dispatches_light_context(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
         mock_result = {"context_state": "close_presence", "recommended_mode": "engaged"}
         dispatch = AsyncMock(return_value=mock_result)
-        o = _orchestrator(tmp_path)
+        o = orchestrator_factory()
         result = await o.run_from_mmwave(
             {"measure": {"latest_light": {"lux": 300.0}}},
             is_idle=False,
@@ -267,8 +293,8 @@ class TestRunFromMmwave:
         assert parsed["lux"] == 300.0
 
     @pytest.mark.asyncio
-    async def test_no_tool_returns_none(self, tmp_path: Path) -> None:
-        o = _orchestrator(tmp_path)
+    async def test_no_tool_returns_none(self, orchestrator_factory: Callable[..., LightOrchestrator]) -> None:
+        o = orchestrator_factory()
         dispatch = AsyncMock(return_value={})
         result = await o.run_from_mmwave(
             {"measure": {"latest_light": {"lux": 300.0}}},

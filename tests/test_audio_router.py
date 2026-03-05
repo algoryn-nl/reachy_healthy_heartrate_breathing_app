@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 import base64
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -11,25 +13,31 @@ import pytest
 from healthy_heartrate_breathing.audio_router import AudioRouter
 
 
-def _router(**overrides: object) -> AudioRouter:
-    defaults = {
-        "output_sample_rate": 24000,
-        "enqueue_audio": AsyncMock(),
-        "feed_head_wobbler": None,
-        "on_activity": MagicMock(),
-    }
-    defaults.update(overrides)
-    return AudioRouter(**defaults)
+@pytest.fixture
+def router_factory() -> Callable[..., AudioRouter]:
+    """Return a factory that builds an AudioRouter with sane defaults."""
+
+    def _make(**overrides: Any) -> AudioRouter:
+        defaults: dict[str, Any] = {
+            "output_sample_rate": 24000,
+            "enqueue_audio": AsyncMock(),
+            "feed_head_wobbler": None,
+            "on_activity": MagicMock(),
+        }
+        defaults.update(overrides)
+        return AudioRouter(**defaults)
+
+    return _make
 
 
 class TestOnAudioDelta:
     @pytest.mark.asyncio
-    async def test_decodes_and_enqueues(self) -> None:
+    async def test_decodes_and_enqueues(self, router_factory: Callable[..., AudioRouter]) -> None:
         enqueue = AsyncMock()
         samples = np.array([100, -200, 300], dtype=np.int16)
         delta_b64 = base64.b64encode(samples.tobytes()).decode("utf-8")
 
-        r = _router(enqueue_audio=enqueue)
+        r = router_factory(enqueue_audio=enqueue)
         await r.on_audio_delta(delta_b64)
 
         enqueue.assert_called_once()
@@ -38,34 +46,34 @@ class TestOnAudioDelta:
         np.testing.assert_array_equal(arr.flatten(), samples)
 
     @pytest.mark.asyncio
-    async def test_feeds_head_wobbler(self) -> None:
+    async def test_feeds_head_wobbler(self, router_factory: Callable[..., AudioRouter]) -> None:
         wobbler_feed = MagicMock()
         samples = np.array([1, 2], dtype=np.int16)
         delta_b64 = base64.b64encode(samples.tobytes()).decode("utf-8")
 
-        r = _router(feed_head_wobbler=wobbler_feed)
+        r = router_factory(feed_head_wobbler=wobbler_feed)
         await r.on_audio_delta(delta_b64)
 
         wobbler_feed.assert_called_once_with(delta_b64)
 
     @pytest.mark.asyncio
-    async def test_calls_on_activity(self) -> None:
+    async def test_calls_on_activity(self, router_factory: Callable[..., AudioRouter]) -> None:
         activity_cb = MagicMock()
         samples = np.array([1], dtype=np.int16)
         delta_b64 = base64.b64encode(samples.tobytes()).decode("utf-8")
 
-        r = _router(on_activity=activity_cb)
+        r = router_factory(on_activity=activity_cb)
         await r.on_audio_delta(delta_b64)
 
         activity_cb.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_no_wobbler_still_works(self) -> None:
+    async def test_no_wobbler_still_works(self, router_factory: Callable[..., AudioRouter]) -> None:
         enqueue = AsyncMock()
         samples = np.array([42], dtype=np.int16)
         delta_b64 = base64.b64encode(samples.tobytes()).decode("utf-8")
 
-        r = _router(enqueue_audio=enqueue, feed_head_wobbler=None)
+        r = router_factory(enqueue_audio=enqueue, feed_head_wobbler=None)
         await r.on_audio_delta(delta_b64)
 
         enqueue.assert_called_once()
@@ -73,26 +81,26 @@ class TestOnAudioDelta:
 
 class TestMalformedInput:
     @pytest.mark.asyncio
-    async def test_malformed_base64_skipped(self) -> None:
+    async def test_malformed_base64_skipped(self, router_factory: Callable[..., AudioRouter]) -> None:
         enqueue = AsyncMock()
-        r = _router(enqueue_audio=enqueue)
+        r = router_factory(enqueue_audio=enqueue)
         await r.on_audio_delta("!!!not-valid-base64!!!")
 
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_base64_skipped(self) -> None:
+    async def test_empty_base64_skipped(self, router_factory: Callable[..., AudioRouter]) -> None:
         enqueue = AsyncMock()
-        r = _router(enqueue_audio=enqueue)
+        r = router_factory(enqueue_audio=enqueue)
         # Empty string decodes to b"" (0 bytes)
         await r.on_audio_delta("")
 
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_odd_byte_length_skipped(self) -> None:
+    async def test_odd_byte_length_skipped(self, router_factory: Callable[..., AudioRouter]) -> None:
         enqueue = AsyncMock()
-        r = _router(enqueue_audio=enqueue)
+        r = router_factory(enqueue_audio=enqueue)
         # 3 bytes — not a valid int16 array
         delta_b64 = base64.b64encode(b"\x01\x02\x03").decode("utf-8")
         await r.on_audio_delta(delta_b64)
@@ -100,17 +108,17 @@ class TestMalformedInput:
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_malformed_base64_still_calls_activity(self) -> None:
+    async def test_malformed_base64_still_calls_activity(self, router_factory: Callable[..., AudioRouter]) -> None:
         activity_cb = MagicMock()
-        r = _router(on_activity=activity_cb)
+        r = router_factory(on_activity=activity_cb)
         await r.on_audio_delta("!!!bad!!!")
 
         activity_cb.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_malformed_base64_still_feeds_wobbler(self) -> None:
+    async def test_malformed_base64_still_feeds_wobbler(self, router_factory: Callable[..., AudioRouter]) -> None:
         wobbler_feed = MagicMock()
-        r = _router(feed_head_wobbler=wobbler_feed)
+        r = router_factory(feed_head_wobbler=wobbler_feed)
         await r.on_audio_delta("!!!bad!!!")
 
         wobbler_feed.assert_called_once_with("!!!bad!!!")

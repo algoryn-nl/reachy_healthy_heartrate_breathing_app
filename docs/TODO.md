@@ -62,16 +62,16 @@
 ### Upcoming — Test Coverage Gaps
 
 - [x] Add AudioRouter tests for malformed base64, empty audio, odd-byte-length (5 tests; 2026-02-28)
-- [ ] Add TranscriptHandler tests for rapid concurrent `on_partial()` calls
-- [ ] Add ToolDispatcher tests for malformed sensor state JSON (light_context timeout covered by PY-HIGH-3)
+- [x] Add TranscriptHandler tests for rapid concurrent `on_partial()` calls (6 tests; 2026-03-05)
+- [x] Add ToolDispatcher tests for malformed sensor state JSON (30 tests; 2026-03-05)
 - [x] Add mmWave tests for serial timeout/disconnection recovery and dropped frames in `_poll_events()` (17 tests; 2026-02-28)
 - [x] Add sweep_look failure-path tests (robot operation errors) (3 tests; 2026-03-01)
 - [x] Add multi-threaded tests for `head_wobbler.py` — deadlock stress test, atomicity test, sway state invariants, rapid reset cycles (4 tests; 2026-03-01)
-- [ ] Add multi-threaded tests for `moves.py`
+- [x] Add multi-threaded tests for `moves.py` — concurrent queue/clear, secondary offsets, rapid start/stop, listening, is_idle (12 tests; 2026-03-05)
 - [x] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression; 4 tests; 2026-02-28)
 - [x] Add personality management path traversal security tests (33 tests; 2026-02-28)
-- [ ] Replace `asyncio.sleep(0.05)` timing in tests with deterministic mechanisms
-- [ ] Convert test factory functions (`_policy()`, `_orchestrator()`) to proper pytest fixtures
+- [x] Replace `asyncio.sleep(0.05)` timing in tests with deterministic event-loop yields and `asyncio.Event` signaling (3 files; 2026-03-05)
+- [x] Convert test factory functions to proper pytest `@pytest.fixture` factory-fixtures (5 files; 2026-03-05)
 
 ### Done
 
