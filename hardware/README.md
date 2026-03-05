@@ -47,6 +47,7 @@ CRC details:
 - `0x04 CMD_SET_TARGETS_MS` payload: `u16 ms`
 - `0x05 CMD_PING` payload: none
 - `0x06 CMD_SET_GUARD_RAILS` payload: `u16 br_min, u16 br_max, u16 hr_min, u16 hr_max` (centi-bpm; clamped to absolute bounds; `ERR_BAD_VALUE` if min >= max)
+- `0x07 CMD_RESET` payload: *(empty)* — re-initialize mmWave radar module; replies `ACK_OK` on success or `ERR_RADAR_INIT_FAIL` on failure
 
 ### Device -> Host events
 
@@ -77,6 +78,7 @@ CRC details:
 - `3` = `BAD_VALUE`
 - `4` = `CRC_FAIL`
 - `5` = `UNSUPPORTED_VERSION`
+- `6` = `RADAR_INIT_FAIL`
 
 ---
 

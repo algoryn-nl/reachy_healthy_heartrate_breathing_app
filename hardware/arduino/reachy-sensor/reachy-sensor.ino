@@ -141,6 +141,7 @@ static const uint8_t CMD_SET_BIO_MS     = 0x03;  // set vitals emission interval
 static const uint8_t CMD_SET_TARGETS_MS = 0x04;  // set targets emission interval (2 bytes: u16 ms, min 50)
 static const uint8_t CMD_PING           = 0x05;  // health check (no payload), replies with EVT_PONG
 static const uint8_t CMD_SET_GUARD_RAILS = 0x06;  // set vitals guard rails (8 bytes: 4x u16 centi-bpm)
+static const uint8_t CMD_RESET           = 0x07;  // re-initialize mmWave radar (no payload)
 
 // --- Device -> Host events ---
 static const uint8_t EVT_ACK     = 0x81;  // command acknowledged (status + value)
@@ -164,6 +165,7 @@ static const uint8_t ERR_BAD_LEN            = 2;  // payload length doesn't matc
 static const uint8_t ERR_BAD_VALUE          = 3;  // payload value out of allowed range
 static const uint8_t ERR_CRC_FAIL           = 4;  // CRC-16 mismatch (data corruption)
 static const uint8_t ERR_UNSUPPORTED_VERSION = 5;  // protocol version mismatch
+static const uint8_t ERR_RADAR_INIT_FAIL    = 6;  // radar re-initialization failed
 
 // --- EVT_TARGETS flags bitfield ---
 static const uint8_t FLAG_FOCUS_VALID      = 1 << 0;  // focus target fields are populated
@@ -849,6 +851,26 @@ static void applyBinaryCommand(uint8_t msgType, const uint8_t* payload, size_t p
     // Host should treat ACK_OK/ACK_CLAMPED as confirmation; read EVT_BIO to
     // observe the guard rails in effect.
     emitAck(msgType, clamped ? ACK_CLAMPED : ACK_OK, 0);
+    return;
+  }
+
+  // CMD_RESET: re-initialize the mmWave radar module.
+  // Used by the host to recover from a stuck radar (mmWave.update() failing
+  // persistently). Only re-inits the radar; all other state (guard rails,
+  // focus cluster, intervals, presence tracking, vitals cache) is preserved.
+  if (msgType == CMD_RESET) {
+    if (payloadLen != 0) {
+      emitErr(msgType, ERR_BAD_LEN);
+      return;
+    }
+    mmWave.begin(&mmWaveSerial);
+    // Re-read to verify initialization succeeded
+    if (mmWave.update(200)) {
+      diag.mmwaveConsecFails = 0;
+      emitAck(msgType, ACK_OK, 0);
+    } else {
+      emitErr(msgType, ERR_RADAR_INIT_FAIL);
+    }
     return;
   }
 
