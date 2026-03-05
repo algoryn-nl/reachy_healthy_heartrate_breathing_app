@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Wellness-aware conversation app for the Reachy Mini robot. Combines an OpenAI Realtime API audio stream with mmWave radar health sensing (heart rate, breathing rate), ambient light context, and adaptive robot behavior. Forked from the Reachy Mini Conversation App.
+Wellness-aware conversation app for the Reachy Mini robot. Combines an OpenAI Realtime API audio stream with mmWave radar health sensing (heart rate, breathing rate), proximity/occlusion context via lux sensor, and adaptive robot behavior. Forked from the Reachy Mini Conversation App.
 
 ## Target Users
 
@@ -32,24 +32,26 @@ Three modes:
 Returns:
 - **Targets**: up to 8 clusters with x/y position, range (m), bearing, velocity; `max_target_count` (highest count seen in session), `targets_truncated` flag (set when sensor detected more targets than the 8-target wire cap)
 - **Bio**: heart rate (bpm), breathing rate (bpm), validity flags
-- **Light**: ambient lux readings collected throughout the session
+- **Light**: lux readings collected throughout the session (proximity/occlusion signal)
 - **Device State**: firmware person state (`device_state`) surfaced as a named field in scan and measure results: NO_TARGET, MULTI_TARGET, PRESENT_FAR, MOVING, STILL_NEAR, RESTING_VITALS
 
 Vitals gating: heart/breath rates only reported when single-target, still, not head-moving, within near zone (35-150 cm). Guard rails: BR 4-30 bpm, HR 35-200 bpm.
 
-Serial port resolution order: explicit parameter, `MMWAVE_SERIAL_PORT` env var, three-tier auto-detection (VID/PID `0x303A:0x1001` for Seeed XIAO ESP32, glob fallback to `/dev/cu.usbmodem*`, `/dev/tty.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, HELLO probe to disambiguate multiple candidates).
+Serial port resolution order: explicit parameter, `MMWAVE_SERIAL_PORT` env var, three-tier auto-detection (VID/PID `0x303A:0x1001` for Seeed XIAO ESP32, platform-aware glob fallback — macOS: `cu.usbmodem`/`tty.usbmodem`; Linux: `ttyACM`/`ttyUSB` — HELLO probe to disambiguate multiple candidates).
 
 Protocol version handshake: at session start, `_handshake_version()` sends `CMD_PING` and validates the first response frame's version byte, returning `status: "version_mismatch"` on mismatch or timeout. Defense-in-depth: mismatched frames are also drop-and-warned in the main polling loop.
 
-### 3. Ambient Light Context
+### 3. Light Context (Proximity/Occlusion)
 
-Classifies ambient environment based on lux level, time of day, and user preferences. Outputs a `context_state` and `recommended_mode` the conversation model uses to adapt tone.
+Classifies proximity and occlusion based on the BH1750 lux sensor, which sits behind/below the person. When someone sits down, their body occludes the sensor and lux drops — this is reframed as a proximity signal, not an ambient light measurement.
 
-Context states (in precedence order): `unexpected_darkening`, `night_wind_down`, `intentional_dim_work`, `prolonged_low_light_strain_risk`, `bright_active`, `neutral`, `lux_missing`.
+Context states: `clear_path`, `close_presence`, `sudden_occlusion`, `partial_occlusion`, `neutral` (when lux missing).
 
-Per-user rolling lux baseline using exponential moving average per hour-of-day, persisted to JSON. Auto-invoked after mmWave returns lux data.
+Lux delta tracking detects sharp drops (someone just sat down). Outputs `context_state`, `recommended_mode`, and action suggestions the conversation model uses to adapt behavior.
 
-Default thresholds: low lux 40, bright lux 250, sharp drop 80 lux in 60 s, prolonged low-light 45 min. All configurable via `HEALTHY_LIGHT_*` env vars.
+Auto-invoked after mmWave returns lux data (orchestrated by `LightOrchestrator`). SQLite analytics storage with time-based retention (configurable via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS`, default 90 days).
+
+Default thresholds: low lux 40 (close proximity), moderate lux 120 (partial occlusion), sharp drop 60 lux in 60 s. All configurable via `HEALTHY_LIGHT_*` env vars.
 
 ### 4. Idle Scanning Policy
 
@@ -90,7 +92,7 @@ Current profile tools: `dance`, `stop_dance`, `play_emotion`, `stop_emotion`, `m
 
 - **Gradio web UI**: `healthy-heartrate-breathing --gradio` at `http://127.0.0.1:7860/`
 - **Headless console**: `healthy-heartrate-breathing` (default)
-  - Settings page includes a **sensor dashboard** panel showing person state, target count, truncation warnings, heart rate, breathing rate, and ambient lux — updated via `GET /sensor` polling (3 s interval)
+  - Settings page includes a **sensor dashboard** panel showing person state, target count, truncation warnings, heart rate, breathing rate, and proximity (lux) — updated via `GET /sensor` polling (3 s interval)
 - Both support `--debug` for verbose logging
 
 ## Hardware Requirements
@@ -99,7 +101,7 @@ Current profile tools: `dance`, `stop_dance`, `play_emotion`, `stop_emotion`, `m
 |---|---|
 | Reachy Mini robot | SDK auto-detects hardware vs simulator |
 | Seeed MR60BHA2 | 60 GHz mmWave radar sensor |
-| BH1750 | Ambient light sensor (I2C, address `0x23`) |
+| BH1750 | Lux sensor for proximity/occlusion detection (I2C, address `0x23`) |
 | XIAO microcontroller | Arduino-compatible, drives both sensors |
 | USB cable | CDC serial at 115200 baud to host |
 

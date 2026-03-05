@@ -70,8 +70,8 @@
 - [x] Add multi-threaded tests for `moves.py` — concurrent queue/clear, secondary offsets, rapid start/stop, listening, is_idle (12 tests; 2026-03-05)
 - [x] Add `light_context.py` test for threshold explicitly set to `0.0` (falsy-zero regression; 4 tests; 2026-02-28)
 - [x] Add personality management path traversal security tests (33 tests; 2026-02-28)
-- [x] Replace `asyncio.sleep(0.05)` timing in tests with deterministic event-loop yields and `asyncio.Event` signaling (3 files; 2026-03-05)
-- [x] Convert test factory functions to proper pytest `@pytest.fixture` factory-fixtures (5 files; 2026-03-05)
+- [x] Replace `asyncio.sleep(0.05)` timing in tests with deterministic event-loop yields and `asyncio.Event` signaling (`test_tool_dispatcher.py`; real sleep retained in `test_transcript_handler.py` where testing actual debounce timing; 2026-03-05)
+- [x] Convert test factory functions to proper pytest `@pytest.fixture` factory-fixtures (`test_tool_dispatcher.py`, `test_transcript_handler.py`, `test_moves.py`; 2026-03-05)
 
 ### Done
 
