@@ -264,7 +264,10 @@ static const float HR_ABS_MIN = 20.0f, HR_ABS_MAX = 300.0f;
 // These prevent flickering between states when the sensor signal is noisy.
 //
 // ABSENT_HOLD_MS: after losing all presence signals, keep reporting "present"
-//   for this many milliseconds (covers brief radar dropouts).
+//   for this many milliseconds. This is the sole absence gate — the old
+//   ABSENT_CONFIRM frame-count threshold was removed in the poll/tick refactor,
+//   making NO_TARGET transitions faster (~1.2s vs ~2.7s at 3 Hz). This is
+//   intentional: the time-based gate is more predictable than frame counting.
 static const uint32_t ABSENT_HOLD_MS = 1200;
 
 // VITALS_CONFIRM_MS: wall-clock duration (ms) where both heart rate AND
@@ -406,7 +409,6 @@ struct SensorSnapshot {
   bool       dist_ok       = false;
   bool       br_ok         = false;
   bool       hr_ok         = false;
-  bool       radarFresh    = false;   // true when poll produced new data; cleared after tick
 };
 static SensorSnapshot snap;
 
@@ -995,9 +997,9 @@ static void pollHostUsbSerial() {
 // pollRadar() — Poll mmWave sensor and update SensorSnapshot
 // ---------------------------------------------------------------------------
 // Called every loop iteration. If the radar returns a complete frame,
-// populates the snapshot with fresh data and sets radarFresh = true.
-// On failure, the snapshot retains previous values (staleness detected
-// by the tick phase via snap.radarMs).
+// populates the snapshot with fresh data. On failure, the snapshot
+// retains previous values (staleness detected by the tick phase via
+// snap.radarMs).
 void pollRadar(uint32_t now) {
   if (!mmWave.update(100)) {
     diag.mmwaveFails++;
@@ -1007,7 +1009,6 @@ void pollRadar(uint32_t now) {
   diag.mmwaveConsecFails = 0;
 
   snap.radarMs = now;
-  snap.radarFresh = true;
 
   // Read presence and target data
   snap.humanDetected = mmWave.isHumanDetected();
@@ -1088,9 +1089,6 @@ void tickStateMachine(uint32_t now) {
   float hr           = radarStale ? NAN   : snap.heartRate;
   bool hr_ok         = radarStale ? false : snap.hr_ok;
   FocusTarget focus  = radarStale ? FocusTarget{} : snap.focus;
-
-  // Clear the fresh flag after consuming
-  snap.radarFresh = false;
 
   // ── Presence detection ──────────────────────────────────────────────────
   bool present_now = humanDetected || (nTargets > 0) ||
