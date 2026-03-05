@@ -988,6 +988,85 @@ static void pollHostUsbSerial() {
 }
 
 // ============================================================================
+// Poll and tick functions
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// pollRadar() — Poll mmWave sensor and update SensorSnapshot
+// ---------------------------------------------------------------------------
+// Called every loop iteration. If the radar returns a complete frame,
+// populates the snapshot with fresh data and sets radarFresh = true.
+// On failure, the snapshot retains previous values (staleness detected
+// by the tick phase via snap.radarMs).
+void pollRadar(uint32_t now) {
+  if (!mmWave.update(100)) {
+    diag.mmwaveFails++;
+    diag.mmwaveConsecFails++;
+    return;
+  }
+  diag.mmwaveConsecFails = 0;
+
+  snap.radarMs = now;
+  snap.radarFresh = true;
+
+  // Read presence and target data
+  snap.humanDetected = mmWave.isHumanDetected();
+
+  bool haveTargets = mmWave.getPeopleCountingTargetInfo(snap.targetInfo);
+  snap.nTargets = haveTargets ? (uint8_t)snap.targetInfo.targets.size() : 0;
+
+  // Pick focus target
+  snap.focus = FocusTarget{};
+  if (haveTargets && snap.nTargets > 0) {
+    if (host.focusCluster >= 0) {
+      snap.focus = pickForcedCluster(snap.targetInfo, host.focusCluster);
+      if (!snap.focus.valid) snap.focus = pickClosestTarget(snap.targetInfo);
+    } else {
+      snap.focus = pickClosestTarget(snap.targetInfo);
+    }
+  }
+
+  // Read distance and vitals with fallback cache
+  float dist_cm = NAN, br = NAN, hr = NAN;
+  snap.dist_ok = mmWave.getDistance(dist_cm);
+  snap.br_ok = mmWave.getBreathRate(br);
+  snap.hr_ok = mmWave.getHeartRate(hr);
+
+  // Distance fallback (no expiry)
+  if (snap.dist_ok && isfinite(dist_cm)) {
+    vitals.dist = dist_cm;
+  } else {
+    dist_cm = vitals.dist;
+  }
+  snap.dist_ok = isFinitePositive(dist_cm);
+  snap.dist_cm = dist_cm;
+
+  // Breathing rate fallback (2-second expiry)
+  if (snap.br_ok && isfinite(br)) {
+    vitals.br = br;
+    vitals.brUpdateMs = now;
+  } else if ((now - vitals.brUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
+    br = vitals.br;
+  } else {
+    vitals.br = NAN;
+    br = NAN;
+  }
+  snap.breathRate = br;
+
+  // Heart rate fallback (2-second expiry)
+  if (snap.hr_ok && isfinite(hr)) {
+    vitals.hr = hr;
+    vitals.hrUpdateMs = now;
+  } else if ((now - vitals.hrUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
+    hr = vitals.hr;
+  } else {
+    vitals.hr = NAN;
+    hr = NAN;
+  }
+  snap.heartRate = hr;
+}
+
+// ============================================================================
 // Arduino entry points: setup() and loop()
 // ============================================================================
 
