@@ -63,3 +63,6 @@ src/healthy_heartrate_breathing/profiles/user_personalities/
 
 docs/plans/
 .claude/
+.mcp.json
+light_context_analytics.db
+light_context_baseline.json
