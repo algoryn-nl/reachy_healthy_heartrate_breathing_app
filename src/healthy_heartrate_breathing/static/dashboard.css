@@ -198,6 +198,130 @@
   max-height: 260px;
 }
 
+/* Trends panel */
+.trends-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+  margin-top: 16px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 12px 0;
+  letter-spacing: 0.3px;
+}
+
+.section-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 12px 0 8px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trends-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.trend-stat-card {
+  background: rgba(69, 196, 255, 0.06);
+  border: 1px solid rgba(69, 196, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+
+.trend-stat-label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.trend-stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.trend-arrow {
+  font-size: 14px;
+}
+
+.trends-chart-wrap {
+  height: 180px;
+  margin-bottom: 8px;
+}
+
+.trends-chart-wrap canvas {
+  width: 100% !important;
+  max-height: 180px;
+}
+
+.trends-placeholder {
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+  padding: 16px;
+  font-size: 13px;
+}
+
+.insight-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.insight-row:last-child {
+  border-bottom: none;
+}
+
+.insight-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.insight-attention {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.insight-info {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+}
+
+.insight-msg {
+  flex: 1;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.insight-time {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* Responsive */
 @media (max-width: 760px) {
   .dashboard-row {
@@ -210,5 +334,9 @@
 
   .vitals-row {
     gap: 16px;
+  }
+
+  .trends-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

@@ -221,6 +221,19 @@ def run(
                 visible=True,
             )
 
+            gr.HTML(
+                """<div id="trends-panel" class="trends-panel">
+  <h3 class="section-title">Wellness Trends (7 days)</h3>
+  <div id="trends-stats" class="trends-stats-grid"></div>
+  <div class="trends-chart-wrap">
+    <canvas id="trends-chart"></canvas>
+  </div>
+  <h4 class="section-subtitle">Recent Observations</h4>
+  <div id="trends-insights"></div>
+</div>""",
+                visible=True,
+            )
+
             # Dashboard JS (inline, runs after DOM elements are rendered)
             gr.HTML(f"<script>{_dashboard_js}</script>", visible=True)
 
@@ -245,6 +258,15 @@ def run(
         @app.get("/api/vitals/history")
         async def vitals_history(hours: int = 4) -> dict:
             return {"rows": handler.vitals_store.query(hours=min(hours, 24))}
+
+        @app.get("/api/vitals/trends")
+        async def vitals_trends_api(days: int = 7) -> dict:
+            from dataclasses import asdict
+
+            days = min(max(days, 1), 30)
+            summary = handler.trend_analyzer.get_summary(days=days)
+            insights = handler.trend_analyzer.recent_insights(limit=5)
+            return {"summary": asdict(summary), "recent_insights": insights}
 
         app = gr.mount_gradio_app(app, stream.ui, path="/")
     else:

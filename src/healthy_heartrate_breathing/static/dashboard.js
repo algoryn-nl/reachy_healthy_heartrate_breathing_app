@@ -413,6 +413,139 @@
       });
   }
 
+  // ---- F. Trends Panel ----
+
+  const TRENDS_REFRESH_MS = 300000;
+  const TREND_ARROWS = { increasing: "\u2191", decreasing: "\u2193", stable: "\u2192" };
+  let trendsChart = null;
+
+  function initTrendsPanel() {
+    const container = document.getElementById("trends-panel");
+    if (!container) return;
+    fetchTrends();
+    setInterval(fetchTrends, TRENDS_REFRESH_MS);
+  }
+
+  function fetchTrends() {
+    fetch("/api/vitals/trends?days=7")
+      .then((r) => {
+        if (!r.ok) throw new Error("fetch failed");
+        return r.json();
+      })
+      .then((data) => {
+        renderTrendsStats(data.summary);
+        renderTrendsChart(data.summary.daily_series);
+        renderInsightsList(data.recent_insights);
+      })
+      .catch(() => {});
+  }
+
+  function renderTrendsStats(summary) {
+    const el = document.getElementById("trends-stats");
+    if (!el) return;
+
+    if (summary.days_of_data < 2) {
+      el.innerHTML =
+        '<p class="trends-placeholder">Collecting data \u2014 trends available after 2 days of readings</p>';
+      return;
+    }
+
+    const hrAvg = summary.hr_avg_7d != null ? summary.hr_avg_7d.toFixed(0) : "--";
+    const brAvg = summary.br_avg_7d != null ? summary.br_avg_7d.toFixed(0) : "--";
+    const hrArrow = TREND_ARROWS[summary.hr_trend] || "";
+    const brArrow = TREND_ARROWS[summary.br_trend] || "";
+    const resting =
+      summary.resting_minutes_avg != null ? summary.resting_minutes_avg.toFixed(0) : "--";
+
+    el.innerHTML =
+      '<div class="trend-stat-card">' +
+      '<span class="trend-stat-label">Avg HR (7d)</span>' +
+      '<span class="trend-stat-value">' + hrAvg + ' <span class="trend-arrow">' + hrArrow + "</span></span>" +
+      "</div>" +
+      '<div class="trend-stat-card">' +
+      '<span class="trend-stat-label">Avg BR (7d)</span>' +
+      '<span class="trend-stat-value">' + brAvg + ' <span class="trend-arrow">' + brArrow + "</span></span>" +
+      "</div>" +
+      '<div class="trend-stat-card">' +
+      '<span class="trend-stat-label">Avg Resting</span>' +
+      '<span class="trend-stat-value">' + resting + " min/day</span>" +
+      "</div>" +
+      '<div class="trend-stat-card">' +
+      '<span class="trend-stat-label">Days of Data</span>' +
+      '<span class="trend-stat-value">' + summary.days_of_data + "</span>" +
+      "</div>";
+  }
+
+  function renderTrendsChart(dailySeries) {
+    const canvas = document.getElementById("trends-chart");
+    if (!canvas || !dailySeries || dailySeries.length === 0) return;
+
+    const labels = dailySeries.map(function (d) {
+      var date = new Date(d.day_start);
+      return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    });
+    const hrData = dailySeries.map(function (d) { return d.hr_avg; });
+    const brData = dailySeries.map(function (d) { return d.br_avg; });
+
+    if (trendsChart) {
+      trendsChart.destroy();
+    }
+
+    trendsChart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "HR avg",
+            data: hrData,
+            backgroundColor: "rgba(239, 68, 68, 0.7)",
+            borderRadius: 4,
+          },
+          {
+            label: "BR avg",
+            data: brData,
+            backgroundColor: "rgba(59, 130, 246, 0.7)",
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: "#9fb6d7" } } },
+        scales: {
+          x: { ticks: { color: "#9fb6d7" }, grid: { color: "rgba(69,196,255,0.08)" } },
+          y: { ticks: { color: "#9fb6d7" }, grid: { color: "rgba(69,196,255,0.08)" } },
+        },
+      },
+    });
+  }
+
+  function renderInsightsList(insights) {
+    const el = document.getElementById("trends-insights");
+    if (!el) return;
+
+    if (!insights || insights.length === 0) {
+      el.innerHTML = '<p class="trends-placeholder">No notable observations yet</p>';
+      return;
+    }
+
+    var html = "";
+    for (var i = 0; i < insights.length; i++) {
+      var ins = insights[i];
+      var badge = ins.severity === "attention" ? "insight-attention" : "insight-info";
+      var ts = new Date(ins.timestamp).toLocaleString();
+      html +=
+        '<div class="insight-row">' +
+        '<span class="insight-badge ' + badge + '">' + ins.severity + "</span>" +
+        '<span class="insight-msg">' + ins.message + "</span>" +
+        '<span class="insight-time">' + ts + "</span>" +
+        "</div>";
+    }
+    el.innerHTML = html;
+  }
+
   // ---- E. Initialization ----
 
   function init() {
@@ -437,6 +570,9 @@
 
     // Connect WebSocket
     connectWS();
+
+    // Trends panel
+    initTrendsPanel();
 
     // Staleness checker
     setInterval(updateConnectionStatus, STALENESS_CHECK_MS);
