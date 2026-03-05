@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 class VitalsStore:
@@ -30,7 +30,11 @@ class VitalsStore:
             conn = sqlite3.connect(self._db_path)
             conn.execute("PRAGMA journal_mode=WAL")
             (version,) = conn.execute("PRAGMA user_version").fetchone()
-            if version != _SCHEMA_VERSION:
+            if version == _SCHEMA_VERSION:
+                conn.close()
+                self._initialized = True
+                return
+            if version == 0:
                 conn.execute("DROP TABLE IF EXISTS vitals_history")
                 conn.execute("DROP INDEX IF EXISTS idx_vitals_history_timestamp")
             conn.executescript(f"""
@@ -45,6 +49,53 @@ class VitalsStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_vitals_history_timestamp
                     ON vitals_history(timestamp);
+
+                CREATE TABLE IF NOT EXISTS vitals_hourly (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hour_start      TEXT    NOT NULL UNIQUE,
+                    hr_avg          REAL,
+                    hr_min          REAL,
+                    hr_max          REAL,
+                    hr_count        INTEGER DEFAULT 0,
+                    br_avg          REAL,
+                    br_min          REAL,
+                    br_max          REAL,
+                    br_count        INTEGER DEFAULT 0,
+                    lux_avg         REAL,
+                    dominant_state  TEXT,
+                    resting_minutes REAL    DEFAULT 0.0
+                );
+                CREATE INDEX IF NOT EXISTS idx_vitals_hourly_start
+                    ON vitals_hourly(hour_start);
+
+                CREATE TABLE IF NOT EXISTS vitals_daily (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    day_start       TEXT    NOT NULL UNIQUE,
+                    hr_avg          REAL,
+                    hr_min          REAL,
+                    hr_max          REAL,
+                    hr_count        INTEGER DEFAULT 0,
+                    br_avg          REAL,
+                    br_min          REAL,
+                    br_max          REAL,
+                    br_count        INTEGER DEFAULT 0,
+                    lux_avg         REAL,
+                    dominant_state  TEXT,
+                    resting_minutes REAL    DEFAULT 0.0
+                );
+                CREATE INDEX IF NOT EXISTS idx_vitals_daily_start
+                    ON vitals_daily(day_start);
+
+                CREATE TABLE IF NOT EXISTS trend_insights (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       TEXT    NOT NULL,
+                    category        TEXT    NOT NULL,
+                    message         TEXT    NOT NULL,
+                    severity        TEXT    NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_trend_insights_timestamp
+                    ON trend_insights(timestamp);
+
                 PRAGMA user_version={_SCHEMA_VERSION};
             """)
             conn.close()
@@ -68,7 +119,14 @@ class VitalsStore:
             conn.execute(
                 "INSERT INTO vitals_history (timestamp, heart_rate_bpm, breath_rate_bpm, device_state, target_count, lux) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (datetime.now(timezone.utc).isoformat(), heart_rate_bpm, breath_rate_bpm, device_state, target_count, lux),
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    heart_rate_bpm,
+                    breath_rate_bpm,
+                    device_state,
+                    target_count,
+                    lux,
+                ),
             )
             conn.commit()
             conn.close()
