@@ -140,6 +140,7 @@ static const uint8_t CMD_SET_FOCUS      = 0x02;  // lock focus to a cluster inde
 static const uint8_t CMD_SET_BIO_MS     = 0x03;  // set vitals emission interval (2 bytes: u16 ms, min 50)
 static const uint8_t CMD_SET_TARGETS_MS = 0x04;  // set targets emission interval (2 bytes: u16 ms, min 50)
 static const uint8_t CMD_PING           = 0x05;  // health check (no payload), replies with EVT_PONG
+static const uint8_t CMD_SET_GUARD_RAILS = 0x06;  // set vitals guard rails (8 bytes: 4x u16 centi-bpm)
 
 // --- Device -> Host events ---
 static const uint8_t EVT_ACK     = 0x81;  // command acknowledged (status + value)
@@ -248,6 +249,12 @@ static const float MOVING_CM_S = 8.0f;  // cm/s
 // These match the MR60BHA2's practical accuracy range.
 static const float BR_MIN = 4.0f,  BR_MAX = 30.0f;   // breathing rate
 static const float HR_MIN = 35.0f, HR_MAX = 200.0f;   // heart rate
+
+// Absolute physiological bounds for CMD_SET_GUARD_RAILS clamping.
+// These are wider than the defaults and represent the limits beyond which
+// sensor data is physically meaningless.
+static const float BR_ABS_MIN = 1.0f,  BR_ABS_MAX = 60.0f;
+static const float HR_ABS_MIN = 20.0f, HR_ABS_MAX = 300.0f;
 
 // --- Hysteresis and debouncing ---
 // These prevent flickering between states when the sensor signal is noisy.
@@ -360,6 +367,10 @@ struct HostSettings {
   int      focusCluster  = -1;                  // host-requested cluster index (-1 = auto-select)
   uint32_t targetsMs     = TARGETS_MS_DEFAULT;  // configurable EVT_TARGETS interval
   uint32_t bioMs         = BIO_MS_DEFAULT;      // configurable EVT_BIO interval
+  float    brMin         = BR_MIN;              // breathing rate lower bound (bpm)
+  float    brMax         = BR_MAX;              // breathing rate upper bound (bpm)
+  float    hrMin         = HR_MIN;              // heart rate lower bound (bpm)
+  float    hrMax         = HR_MAX;              // heart rate upper bound (bpm)
 };
 static HostSettings host;
 
@@ -798,6 +809,49 @@ static void applyBinaryCommand(uint8_t msgType, const uint8_t* payload, size_t p
     return;
   }
 
+  // CMD_SET_GUARD_RAILS: adjust the vitals acceptance ranges.
+  // Payload: 4x u16 in centi-bpm (br_min, br_max, hr_min, hr_max).
+  // Each value is clamped to absolute physiological bounds. If min >= max
+  // for either pair after clamping, the command is rejected (ERR_BAD_VALUE).
+  if (msgType == CMD_SET_GUARD_RAILS) {
+    if (payloadLen != 8) {
+      emitErr(msgType, ERR_BAD_LEN);
+      return;
+    }
+    // Decode centi-bpm and convert to float bpm
+    float brMin = (float)readU16LE(payload + 0) / 100.0f;
+    float brMax = (float)readU16LE(payload + 2) / 100.0f;
+    float hrMin = (float)readU16LE(payload + 4) / 100.0f;
+    float hrMax = (float)readU16LE(payload + 6) / 100.0f;
+
+    // Clamp to absolute bounds
+    bool clamped = false;
+    if (brMin < BR_ABS_MIN) { brMin = BR_ABS_MIN; clamped = true; }
+    if (brMin > BR_ABS_MAX) { brMin = BR_ABS_MAX; clamped = true; }
+    if (brMax < BR_ABS_MIN) { brMax = BR_ABS_MIN; clamped = true; }
+    if (brMax > BR_ABS_MAX) { brMax = BR_ABS_MAX; clamped = true; }
+    if (hrMin < HR_ABS_MIN) { hrMin = HR_ABS_MIN; clamped = true; }
+    if (hrMin > HR_ABS_MAX) { hrMin = HR_ABS_MAX; clamped = true; }
+    if (hrMax < HR_ABS_MIN) { hrMax = HR_ABS_MIN; clamped = true; }
+    if (hrMax > HR_ABS_MAX) { hrMax = HR_ABS_MAX; clamped = true; }
+
+    // Reject if min >= max after clamping
+    if (brMin >= brMax || hrMin >= hrMax) {
+      emitErr(msgType, ERR_BAD_VALUE);
+      return;
+    }
+
+    host.brMin = brMin;
+    host.brMax = brMax;
+    host.hrMin = hrMin;
+    host.hrMax = hrMax;
+    // Value=0: four applied values can't fit the single i32 ACK value field.
+    // Host should treat ACK_OK/ACK_CLAMPED as confirmation; read EVT_BIO to
+    // observe the guard rails in effect.
+    emitAck(msgType, clamped ? ACK_CLAMPED : ACK_OK, 0);
+    return;
+  }
+
   emitErr(msgType, ERR_UNKNOWN_CMD);
 }
 
@@ -1094,8 +1148,8 @@ void loop() {
                             (presence.humanStableStreak >= HUMAN_STABLE_FALLBACK_CONFIRM);
 
   // Guard rail check: reject physiologically impossible values.
-  bool br_valid = br_ok && isfinite(br) && (br >= BR_MIN) && (br <= BR_MAX);
-  bool hr_valid = hr_ok && isfinite(hr) && (hr >= HR_MIN) && (hr <= HR_MAX);
+  bool br_valid = br_ok && isfinite(br) && (br >= host.brMin) && (br <= host.brMax);
+  bool hr_valid = hr_ok && isfinite(hr) && (hr >= host.hrMin) && (hr <= host.hrMax);
 
   // The three-level vitals gate:
   //   allowed → conditions permit measurement (single target + head still)

@@ -29,6 +29,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     CMD_SET_BIO_MS,
     FEAT_LIGHT_SENSOR,
     CMD_SET_TARGETS_MS,
+    CMD_SET_GUARD_RAILS,
     ProtocolError,
     cobs_encode,
     decode_event,
@@ -36,6 +37,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     encode_frame,
     crc16_ccitt_false,
     extract_encoded_frames,
+    pack_cmd_set_guard_rails,
 )
 
 
@@ -2459,3 +2461,53 @@ class TestDiagIntegration:
 
         assert response["status"] == "ok"
         assert "diagnostics" not in response["measure"]
+
+
+class TestCmdSetGuardRails:
+    def test_pack_default_values(self):
+        """Pack default guard rails (BR 4-30, HR 35-200) and verify payload."""
+        payload = pack_cmd_set_guard_rails(4.0, 30.0, 35.0, 200.0)
+        assert len(payload) == 8
+        br_min, br_max, hr_min, hr_max = struct.unpack("<HHHH", payload)
+        assert br_min == 400    # 4.0 * 100
+        assert br_max == 3000   # 30.0 * 100
+        assert hr_min == 3500   # 35.0 * 100
+        assert hr_max == 20000  # 200.0 * 100
+
+    def test_pack_fractional_values(self):
+        """Fractional bpm values round to nearest centi-bpm."""
+        payload = pack_cmd_set_guard_rails(3.5, 25.5, 40.5, 180.5)
+        br_min, br_max, hr_min, hr_max = struct.unpack("<HHHH", payload)
+        assert br_min == 350
+        assert br_max == 2550
+        assert hr_min == 4050
+        assert hr_max == 18050
+
+    def test_pack_encode_frame_round_trip(self):
+        """Pack, encode into a frame, decode — verify CMD type and payload."""
+        payload = pack_cmd_set_guard_rails(4.0, 30.0, 35.0, 200.0)
+        frame = encode_frame(CMD_SET_GUARD_RAILS, payload)
+        frames = extract_encoded_frames(bytearray(frame))
+        assert len(frames) == 1
+        _version, msg_type, _seq, decoded_payload = decode_frame(frames[0])
+        assert msg_type == CMD_SET_GUARD_RAILS
+        assert decoded_payload == payload
+
+    def test_cmd_constant_value(self):
+        """CMD_SET_GUARD_RAILS is 0x06."""
+        assert CMD_SET_GUARD_RAILS == 0x06
+
+    def test_pack_zero_bpm_encodes_to_zero(self):
+        """Zero bpm encodes to 0 centi-bpm (firmware will clamp to ABS_MIN)."""
+        payload = pack_cmd_set_guard_rails(0.0, 30.0, 35.0, 200.0)
+        br_min = struct.unpack("<H", payload[:2])[0]
+        assert br_min == 0
+
+    def test_pack_absolute_bounds_encode(self):
+        """Values at firmware absolute bounds encode correctly."""
+        payload = pack_cmd_set_guard_rails(1.0, 60.0, 20.0, 300.0)
+        br_min, br_max, hr_min, hr_max = struct.unpack("<HHHH", payload)
+        assert br_min == 100
+        assert br_max == 6000
+        assert hr_min == 2000
+        assert hr_max == 30000

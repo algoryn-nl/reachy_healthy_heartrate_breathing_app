@@ -44,6 +44,7 @@ CRC details:
 - `0x03 CMD_SET_BIO_MS` payload: `u16 ms`
 - `0x04 CMD_SET_TARGETS_MS` payload: `u16 ms`
 - `0x05 CMD_PING` payload: none
+- `0x06 CMD_SET_GUARD_RAILS` payload: `u16 br_min, u16 br_max, u16 hr_min, u16 hr_max` (centi-bpm; clamped to absolute bounds; `ERR_BAD_VALUE` if min >= max)
 
 ### Device -> Host events
 

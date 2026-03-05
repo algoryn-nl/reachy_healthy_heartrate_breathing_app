@@ -14,6 +14,7 @@ CMD_SET_FOCUS = 0x02
 CMD_SET_BIO_MS = 0x03
 CMD_SET_TARGETS_MS = 0x04
 CMD_PING = 0x05
+CMD_SET_GUARD_RAILS = 0x06
 
 # Device -> host events
 EVT_ACK = 0x81
@@ -197,6 +198,19 @@ def pack_cmd_set_bio_ms(ms: int) -> bytes:
 def pack_cmd_set_targets_ms(ms: int) -> bytes:
     """Build payload for CMD_SET_TARGETS_MS."""
     return struct.pack("<H", int(ms) & 0xFFFF)
+
+
+def pack_cmd_set_guard_rails(
+    br_min_bpm: float, br_max_bpm: float, hr_min_bpm: float, hr_max_bpm: float
+) -> bytes:
+    """Build payload for CMD_SET_GUARD_RAILS (4x u16 centi-bpm)."""
+    return struct.pack(
+        "<HHHH",
+        round(br_min_bpm * 100) & 0xFFFF,
+        round(br_max_bpm * 100) & 0xFFFF,
+        round(hr_min_bpm * 100) & 0xFFFF,
+        round(hr_max_bpm * 100) & 0xFFFF,
+    )
 
 
 def decode_event(msg_type: int, payload: bytes) -> dict[str, Any]:

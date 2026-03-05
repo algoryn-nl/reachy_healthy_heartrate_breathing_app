@@ -206,7 +206,7 @@ The project includes a custom hardware component under `hardware/`.
 
 **Binary protocol** (`MMWAVE_PROTO_V1`): fully documented in `hardware/README.md`
 - Transport: COBS-framed packets terminated by `0x00`, CRC-16/CCITT-FALSE verified, little-endian
-- Host commands: `CMD_SET_HM` (head-moving mode), `CMD_SET_FOCUS` (target cluster), `CMD_SET_BIO_MS`/`CMD_SET_TARGETS_MS` (telemetry cadence), `CMD_PING`
+- Host commands: `CMD_SET_HM` (head-moving mode), `CMD_SET_FOCUS` (target cluster), `CMD_SET_BIO_MS`/`CMD_SET_TARGETS_MS` (telemetry cadence), `CMD_PING`, `CMD_SET_GUARD_RAILS` (vitals BR/HR acceptance ranges, 4x u16 centi-bpm)
 - Device events: `EVT_STATE` (rate-limited to 200ms min interval on change), `EVT_TARGETS` (up to 8 targets with x/y/r/bearing/velocity), `EVT_BIO` (heart rate + breath rate in centi-bpm), `EVT_LIGHT` (lux as f32), `EVT_DIAG` (diagnostic counters every 10s: mmWave fail count, consecutive fails, TX drops), `EVT_ACK`/`EVT_ERR`/`EVT_PONG`/`EVT_HELLO`
 
 **Paired Python components** (firmware and host must match):
@@ -440,7 +440,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (418 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, and firmware codec cross-validation via ctypes)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (424 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, and firmware codec cross-validation via ctypes)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 
