@@ -7,6 +7,7 @@ import asyncio
 import argparse
 import threading
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 import gradio as gr
 from fastapi import FastAPI
@@ -131,31 +132,101 @@ def run(
             value=os.getenv("OPENAI_API_KEY") if not get_space() else "",
         )
 
-        from healthy_heartrate_breathing.gradio_personality import PersonalityUI
-
-        personality_ui = PersonalityUI()
-        personality_ui.create_components()
-
         stream = Stream(
             handler=handler,
             mode="send-receive",
             modality="audio",
-            additional_inputs=[
-                chatbot,
-                api_key_textbox,
-                *personality_ui.additional_inputs_ordered(),
-            ],
+            additional_inputs=[chatbot, api_key_textbox],
             additional_outputs=[chatbot],
             additional_outputs_handler=update_chatbot,
-            ui_args={"title": "Talk with Reachy Mini"},
+            ui_args={"title": "Healthy Heartrate Breathing"},
         )
         stream_manager = stream.ui
+
+        # Inject dashboard panels below the default Stream UI.
+        # dashboard.css variables are defined inline; dashboard.js/CSS loaded as static files.
+        static_dir = Path(__file__).parent / "static"
+        _dashboard_css = (static_dir / "dashboard.css").read_text(encoding="utf-8")
+        _dashboard_js = (static_dir / "dashboard.js").read_text(encoding="utf-8")
+
+        with stream_manager:
+            # CSS variable root + dashboard styles (inline to avoid static-file routing issues)
+            gr.HTML(
+                f"""<style>
+:root {{
+  --bg: #060b1a;
+  --bg-2: #071023;
+  --panel: rgba(11, 18, 36, 0.8);
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #eaf2ff;
+  --muted: #9fb6d7;
+  --ok: #4ce0b3;
+  --warn: #ffb547;
+  --error: #ff5c70;
+  --accent: #45c4ff;
+  --accent-2: #5ef0c1;
+  --shadow: 0 20px 70px rgba(0, 0, 0, 0.45);
+}}
+{_dashboard_css}
+</style>""",
+                visible=True,
+            )
+
+            # Chart.js CDN (required before dashboard.js)
+            gr.HTML(
+                '<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>'
+                '<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/'
+                'chartjs-adapter-date-fns.bundle.min.js"></script>',
+                visible=True,
+            )
+
+            # Dashboard panels
+            gr.HTML(
+                """<div class="dashboard-row">
+  <div id="vitals-card" class="vitals-card">
+    <div class="vitals-row">
+      <div class="vitals-item">
+        <span class="vitals-label">Heart Rate</span>
+        <span class="vitals-value vitals-inactive" id="hr-value">--</span>
+        <span class="vitals-unit">bpm</span>
+      </div>
+      <div class="vitals-item">
+        <span class="vitals-label">Breathing</span>
+        <span class="vitals-value vitals-inactive" id="br-value">--</span>
+        <span class="vitals-unit">bpm</span>
+      </div>
+    </div>
+    <div class="vitals-meta">
+      <span id="state-badge" class="state-badge state-none">--</span>
+      <span id="target-count">Targets: --</span>
+      <span id="lux-value">Lux: --</span>
+    </div>
+    <div class="vitals-status">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text">Connecting...</span>
+    </div>
+  </div>
+  <div id="radar-panel" class="radar-container">
+    <canvas id="radar-canvas" width="300" height="300"></canvas>
+  </div>
+</div>""",
+                visible=True,
+            )
+
+            gr.HTML(
+                """<div id="chart-panel" class="chart-container">
+  <canvas id="vitals-chart"></canvas>
+</div>""",
+                visible=True,
+            )
+
+            # Dashboard JS (inline, runs after DOM elements are rendered)
+            gr.HTML(f"<script>{_dashboard_js}</script>", visible=True)
+
         if not settings_app:
             app = FastAPI()
         else:
             app = settings_app
-
-        personality_ui.wire_events(handler, stream_manager)
 
         # Mount live sensor WebSocket and vitals history REST endpoint
         from starlette.websockets import WebSocket, WebSocketDisconnect

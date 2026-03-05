@@ -241,7 +241,9 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
             # api key was not found in .env or in the environment variables
             await self.wait_for_args()  # type: ignore[no-untyped-call]
             args = list(self.latest_args)
-            textbox_api_key = args[3] if len(args[3]) > 0 else None
+            # additional_inputs=[chatbot, api_key_textbox] → latest_args is
+            # ["__webrtc_value__", chatbot, api_key_textbox], so the key is at index 2.
+            textbox_api_key = args[2] if len(args) > 2 and args[2] else None
             if textbox_api_key is not None:
                 openai_api_key = textbox_api_key
                 self._key_source = "textbox"
