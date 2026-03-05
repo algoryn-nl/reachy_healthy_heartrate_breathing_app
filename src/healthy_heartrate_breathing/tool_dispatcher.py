@@ -240,6 +240,7 @@ class ToolDispatcher:
         head_wobbler_reset: Callable[[], None] | None,
         timeout_s: float = 30.0,
         on_sensor_update: Optional[Callable[[dict[str, Any]], None]] = None,
+        vitals_append: Optional[Callable[..., None]] = None,
     ) -> None:
         self._idle_policy = idle_policy
         self._light_orchestrator = light_orchestrator
@@ -253,6 +254,7 @@ class ToolDispatcher:
         self._head_wobbler_reset = head_wobbler_reset
         self._timeout_s = timeout_s
         self._on_sensor_update = on_sensor_update
+        self._vitals_append = vitals_append
         self._semaphore = asyncio.Semaphore(1)
         self._active_task: asyncio.Task[None] | None = None
         self._last_device_state: str | None = None
@@ -427,6 +429,18 @@ class ToolDispatcher:
                 device_ctx = build_device_context(new_sensor)
                 if device_ctx is not None:
                     tool_result["device_context"] = device_ctx
+
+                if self._vitals_append is not None:
+                    try:
+                        self._vitals_append(
+                            heart_rate_bpm=new_sensor.get("heart_rate_bpm"),
+                            breath_rate_bpm=new_sensor.get("breath_rate_bpm"),
+                            device_state=new_sensor.get("device_state"),
+                            target_count=new_sensor.get("target_count"),
+                            lux=new_sensor.get("lux"),
+                        )
+                    except Exception:
+                        logger.debug("Vitals store append failed", exc_info=True)
             except Exception:
                 logger.debug("Sensor state update failed", exc_info=True)
 

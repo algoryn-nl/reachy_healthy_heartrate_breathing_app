@@ -823,3 +823,72 @@ class TestExtractSensorStateMalformed:
         state = extract_sensor_state({"scan": {}})
         assert state.get("device_state") is None
         assert state.get("target_count", 0) == 0
+
+
+class TestVitalsStoreIntegration:
+    @pytest.mark.asyncio
+    async def test_mmwave_result_appended_to_vitals_store(self, dispatcher_factory) -> None:
+        """When mmWave returns valid data, it should be appended to vitals_store."""
+        appended: list[dict[str, Any]] = []
+
+        def mock_append(**kwargs: Any) -> None:
+            appended.append(kwargs)
+
+        result = {
+            "scan": {
+                "device_state": "STILL_NEAR",
+                "latest_target": {"x": 1.0, "y": 2.0, "r": 0.8},
+                "max_target_count": 1,
+                "light_summary": {"latest_lux": 55.0},
+            },
+            "measure": {
+                "device_state": "STILL_NEAR",
+                "valid_bio": {"heart_rate_bpm": 72.0, "breath_rate_bpm": 16.0},
+                "success": True,
+            },
+            "status": "ok",
+        }
+        dispatch = AsyncMock(return_value=result)
+        d = dispatcher_factory(dispatch_tool=dispatch, on_sensor_update=lambda s: None)
+        d._vitals_append = mock_append
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json='{"mode":"scan"}', call_id="c1", is_idle=False)
+
+        assert len(appended) == 1
+        assert appended[0]["device_state"] == "STILL_NEAR"
+        assert appended[0]["heart_rate_bpm"] == 72.0
+        assert appended[0]["breath_rate_bpm"] == 16.0
+        assert appended[0]["target_count"] == 1
+        assert appended[0]["lux"] == 55.0
+
+    @pytest.mark.asyncio
+    async def test_vitals_not_appended_for_non_mmwave(self, dispatcher_factory) -> None:
+        """Non-mmWave tools should not trigger vitals append."""
+        appended: list[dict[str, Any]] = []
+
+        def mock_append(**kwargs: Any) -> None:
+            appended.append(kwargs)
+
+        dispatch = AsyncMock(return_value={"status": "ok"})
+        d = dispatcher_factory(dispatch_tool=dispatch, has_tool=lambda name: True)
+        d._vitals_append = mock_append
+
+        await _dispatch_and_wait(d, tool_name="dance", args_json="{}", call_id="c1", is_idle=False)
+        assert len(appended) == 0
+
+    @pytest.mark.asyncio
+    async def test_vitals_append_failure_does_not_crash(self, dispatcher_factory) -> None:
+        """If vitals_append raises, the tool dispatch should still complete."""
+
+        def bad_append(**kwargs: Any) -> None:
+            raise RuntimeError("db write failed")
+
+        result = {"scan": {"device_state": "MOVING", "latest_target": {"x": 1.0}}, "status": "ok"}
+        dispatch = AsyncMock(return_value=result)
+        send_result = AsyncMock()
+        d = dispatcher_factory(dispatch_tool=dispatch, send_tool_result=send_result)
+        d._vitals_append = bad_append
+
+        await _dispatch_and_wait(d, tool_name="mmWave", args_json="{}", call_id="c1", is_idle=False)
+        # Result should still be sent despite vitals_append failure
+        assert send_result.called

@@ -124,6 +124,15 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
         from healthy_heartrate_breathing.light_orchestrator import LightOrchestrator
 
         _light_user_id = (os.getenv("HEALTHY_LIGHT_CONTEXT_USER_ID", "default") or "default").strip() or "default"
+        # Vitals history store (SQLite, rolling window)
+        from healthy_heartrate_breathing.vitals_store import VitalsStore
+
+        self.vitals_store = VitalsStore(
+            db_path=self._resolve_runtime_data_path("vitals_history.db"),
+            max_hours=env_int("HEALTHY_VITALS_MAX_HOURS", 4, min_value=1),
+        )
+        logger.info("Vitals store: db_path=%s", self.vitals_store._db_path)
+
         self.light_orchestrator = LightOrchestrator(
             enabled=env_flag("HEALTHY_AUTO_LIGHT_CONTEXT_ENABLED", True),
             analytics_enabled=env_flag("HEALTHY_LIGHT_ANALYTICS_ENABLED", True),
@@ -395,6 +404,7 @@ class OpenaiRealtimeHandler(AsyncStreamHandler):
                 head_wobbler_reset=(self.deps.head_wobbler.reset if self.deps.head_wobbler is not None else None),
                 timeout_s=env_float("HEALTHY_TOOL_DISPATCH_TIMEOUT_S", 30.0, min_value=1.0),
                 on_sensor_update=self._replace_sensor_state,
+                vitals_append=self.vitals_store.append,
             )
             self._dispatcher = dispatcher
 
