@@ -70,7 +70,7 @@ The session logic in `_run_realtime_session()` is decomposed into five handler c
 |---------|------|----------------|
 | `AudioRouter` | `audio_router.py` | receive/emit: decode base64 audio deltas, feed head wobbler, enqueue output |
 | `IdlePolicy` | `idle_policy.py` | State machine for idle detection; triggers mmWave probes after inactivity; multi-target aware (backs off probing, suggests scan-only when >1 target) (state diagram in module docstring) |
-| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()` (includes `recent_targets` for radar); injects `device_context` dict into mmWave results via `build_device_context()` (vitals reliability, state transitions); appends vitals to `VitalsStore` |
+| `ToolDispatcher` | `tool_dispatcher.py` | Non-blocking tool dispatch: `asyncio.create_task()` + `Semaphore(1)` + configurable timeout; extracts sensor state after mmWave calls via `extract_sensor_state()` (includes `recent_targets` for radar); injects `device_context` dict into mmWave results via `build_device_context()`; injects `trend_insight` when TrendAnalyzer detects anomaly; appends vitals to `VitalsStore`; triggers `VitalsAggregator.rollup()` |
 | `TranscriptHandler` | `transcript_handler.py` | Partial transcript debouncing (configurable delay) and completed transcript output routing |
 | `LightOrchestrator` | `light_orchestrator.py` | Auto-invokes light context analysis after mmWave returns lux data; owns lux delta tracking and analytics |
 
@@ -111,6 +111,7 @@ Profile-specific tools in `profiles/_healthy_heartrate_breathing_locked_profile/
 | `light_context` | `light_context.py` | Proximity/occlusion context classifier |
 | `sweep_look` | `sweep_look.py` | Rotate head to widen scan field |
 | `custom_tool` | `custom_tool.py` | Template for creating new tools |
+| `vitals_trends` | `vitals_trends.py` | On-demand wellness trends and history summary |
 
 ### Profile System
 
@@ -143,6 +144,7 @@ When running with `--gradio`, the UI shows a real-time sensor dashboard instead 
 - **Live vitals card**: heart rate, breathing rate, device state, target count, lux — pushed via WebSocket (`/ws/sensor`)
 - **Radar canvas**: HTML5 Canvas top-down view of detected people with range rings (0.5m/1.0m/1.5m), colored dots per target state
 - **Vitals history chart**: Chart.js rolling graph of HR/BR over time, loaded from `/api/vitals/history` REST endpoint + real-time WS updates
+- **Trends panel**: daily HR/BR bar chart, stats summary cards (7d averages with trend arrows), notable events list — fetched from `/api/vitals/trends` every 5 min
 - **Chatbot**: tucked in a collapsed `gr.Accordion` at the bottom
 - **API key input**: kept in header area
 
@@ -153,6 +155,8 @@ New components:
 - `vitals_store.py:VitalsStore` — SQLite append-only store with rolling time window pruning (WAL mode, `PRAGMA user_version`)
 - `static/dashboard.js` — WS client, vitals card, radar canvas, Chart.js integration
 - `static/dashboard.css` — dark theme styles for dashboard components
+- `vitals_aggregator.py:VitalsAggregator` — hourly/daily rollup from raw readings, retention pruning
+- `trend_analyzer.py:TrendAnalyzer` — stateless trend analysis, anomaly detection, insight persistence
 
 ### Personality Management (Headless Mode)
 
@@ -262,6 +266,7 @@ When running with `--gradio`, these endpoints are mounted on the Gradio ASGI app
 |----------|------|---------|
 | `/ws/sensor` | WebSocket | Real-time sensor state push to dashboard clients |
 | `/api/vitals/history` | GET | Vitals history rows (query param: `hours`, max 24) |
+| `/api/vitals/trends` | GET | Trend summary and recent insights (query param: `days`, max 30) |
 
 ### Light Context System (Proximity/Occlusion)
 
@@ -308,6 +313,8 @@ src/healthy_heartrate_breathing/
   transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
   light_orchestrator.py     -- lux delta tracking, auto light_context dispatch, proximity analytics logging
   vitals_store.py           -- VitalsStore: SQLite append-only vitals history with rolling window pruning
+  vitals_aggregator.py      -- VitalsAggregator: hourly/daily rollup from raw vitals
+  trend_analyzer.py         -- TrendAnalyzer: stateless trend analysis, anomaly detection
   sensor_ws.py              -- SensorBroadcaster: WebSocket client management and broadcast
   console.py                -- LocalStream: headless bidirectional audio, settings UI, REST endpoints
   gradio_personality.py     -- PersonalityUI: Gradio components for profile management (unused in Gradio mode; retained for headless)
@@ -344,6 +351,7 @@ src/healthy_heartrate_breathing/
       mmwave_protocol.py    -- binary protocol encoder/decoder (COBS, CRC-16)
       light_context.py      -- proximity/occlusion context classifier
       sweep_look.py         -- head sweep tool
+      vitals_trends.py      -- on-demand wellness trends tool
       custom_tool.py        -- template for creating new tools
   static/
     index.html              -- headless settings page with sensor dashboard
@@ -368,6 +376,9 @@ tests/
   test_transcript_handler.py -- TranscriptHandler debouncing tests
   test_vitals_store.py      -- VitalsStore SQLite append, query, prune, schema tests
   test_sensor_ws.py         -- SensorBroadcaster connect, disconnect, broadcast, dead client tests
+  test_vitals_aggregator.py -- VitalsAggregator rollup and pruning tests
+  test_trend_analyzer.py    -- TrendAnalyzer anomaly detection and summary tests
+  test_vitals_trends.py     -- vitals_trends tool integration tests
   audio/                    -- audio subsystem tests
   vision/                   -- vision subsystem tests
 
@@ -445,6 +456,19 @@ Key configuration (see `.env.example`):
 |---|---|---|
 | `HEALTHY_VITALS_MAX_HOURS` | `4` | Rolling window for vitals history retention (hours) |
 
+### Trend Analysis
+
+| Variable | Default | Description |
+|---|---|---|
+| `HEALTHY_VITALS_HOURLY_RETENTION_DAYS` | `30` | Days to retain hourly vitals aggregates |
+| `HEALTHY_VITALS_DAILY_RETENTION_DAYS` | `90` | Days to retain daily vitals aggregates |
+| `HEALTHY_TREND_DEVIATION_THRESHOLD` | `1.5` | Standard deviations for anomaly detection |
+| `HEALTHY_TREND_HR_HIGH` | `100` | Heart rate above this triggers absolute anomaly (bpm) |
+| `HEALTHY_TREND_HR_LOW` | `45` | Heart rate below this triggers absolute anomaly (bpm) |
+| `HEALTHY_TREND_BR_HIGH` | `25` | Breathing rate above this triggers absolute anomaly (bpm) |
+| `HEALTHY_TREND_BR_LOW` | `6` | Breathing rate below this triggers absolute anomaly (bpm) |
+| `HEALTHY_TREND_COOLDOWN_S` | `900` | Minimum seconds between trend insights |
+
 ### Light Context Policy (Proximity/Occlusion)
 
 | Variable | Default | Description |
@@ -479,7 +503,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (508 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, and SensorBroadcaster WebSocket tests)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (551 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, SensorBroadcaster WebSocket tests, VitalsAggregator rollup/pruning tests, TrendAnalyzer anomaly detection tests, and vitals_trends tool integration tests)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

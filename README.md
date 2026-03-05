@@ -170,6 +170,14 @@ All configuration is via environment variables. Key variables:
 | `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` | `90` | Days before old analytics rows are pruned |
 | `HEALTHY_DISABLED_TOOLS` | *(empty)* | Comma-separated tool names to disable |
 | `HEALTHY_TOOL_DISPATCH_TIMEOUT_S` | `30` | Max seconds per tool call before timeout |
+| `HEALTHY_VITALS_HOURLY_RETENTION_DAYS` | `30` | Days to retain hourly vitals aggregates |
+| `HEALTHY_VITALS_DAILY_RETENTION_DAYS` | `90` | Days to retain daily vitals aggregates |
+| `HEALTHY_TREND_DEVIATION_THRESHOLD` | `1.5` | Std deviations for anomaly detection |
+| `HEALTHY_TREND_HR_HIGH` | `100` | HR above this triggers anomaly (bpm) |
+| `HEALTHY_TREND_HR_LOW` | `45` | HR below this triggers anomaly (bpm) |
+| `HEALTHY_TREND_BR_HIGH` | `25` | BR above this triggers anomaly (bpm) |
+| `HEALTHY_TREND_BR_LOW` | `6` | BR below this triggers anomaly (bpm) |
+| `HEALTHY_TREND_COOLDOWN_S` | `900` | Min seconds between trend insights |
 
 ## Tool System
 
@@ -180,6 +188,7 @@ Tools are loaded from the active profile's `tools.txt`. Each tool is a Python cl
 - `mmWave` -- radar sensor (see above)
 - `light_context` -- proximity/occlusion context (see above)
 - `sweep_look` -- rotate head to look around
+- `vitals_trends` -- on-demand wellness trends and history summary
 
 Custom tools can be added by creating a `.py` file in the profile folder that defines a `Tool` subclass.
 
@@ -226,6 +235,7 @@ When running with `--gradio`, the web UI shows a real-time sensor dashboard:
 - **Live vitals**: heart rate, breathing rate, device state, target count, proximity — updated in real-time via WebSocket
 - **Radar view**: top-down canvas showing detected people with range rings and colored position dots
 - **Vitals history**: rolling Chart.js graph of HR and BR over the last 2–4 hours (persisted to SQLite)
+- **Trends panel**: daily HR/BR bar chart, 7-day stats summary with trend arrows, notable events list — health trend analysis with long-term vitals aggregation and wellness insights
 - **Conversation log**: chatbot transcript in a collapsed accordion
 
-The dashboard connects via WebSocket (`/ws/sensor`) for instant updates and fetches historical data from `/api/vitals/history`.
+The dashboard connects via WebSocket (`/ws/sensor`) for instant updates, fetches historical data from `/api/vitals/history`, and loads trend summaries from `/api/vitals/trends`.
