@@ -1,6 +1,6 @@
 ---
 title: Healthy Heartrate Breathing
-emoji: 🤖
+emoji: ❤️
 colorFrom: purple
 colorTo: gray
 sdk: static
