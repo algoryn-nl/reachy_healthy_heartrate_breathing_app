@@ -12,7 +12,9 @@ tags:
 
 # Healthy Heartrate Breathing
 
-[![Watch the video](https://img.youtube.com/vi/HkTQhnZpP7Q/maxresdefault.jpg)](https://www.youtube.com/watch?v=HkTQhnZpP7Q)
+[![Watch the video](https://img.youtube.com/vi/HkTQhnZpP7Q/maxresdefault.jpg)](https://youtu.be/HkTQhnZpP7Q)
+
+### [Reachy Mini with a mmWave heart rate sensor ](https://youtu.be/HkTQhnZpP7Q)
 
 A wellness-aware conversation app for the Reachy Mini robot. It uses an mmWave radar sensor for presence detection, heart rate, and breathing rate measurement, and a lux sensor for proximity/occlusion detection (the sensor sits behind the user — low lux means someone is close, not that the room is dark).
 
