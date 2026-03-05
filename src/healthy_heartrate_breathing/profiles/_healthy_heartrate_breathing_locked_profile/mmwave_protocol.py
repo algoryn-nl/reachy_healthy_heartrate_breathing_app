@@ -15,6 +15,7 @@ CMD_SET_BIO_MS = 0x03
 CMD_SET_TARGETS_MS = 0x04
 CMD_PING = 0x05
 CMD_SET_GUARD_RAILS = 0x06
+CMD_RESET = 0x07
 
 # Device -> host events
 EVT_ACK = 0x81
@@ -38,6 +39,7 @@ ERR_BAD_LEN = 2
 ERR_BAD_VALUE = 3
 ERR_CRC_FAIL = 4
 ERR_UNSUPPORTED_VERSION = 5
+ERR_RADAR_INIT_FAIL = 6
 
 # Target event flags
 FLAG_FOCUS_VALID = 1 << 0
@@ -211,6 +213,11 @@ def pack_cmd_set_guard_rails(
         round(hr_min_bpm * 100) & 0xFFFF,
         round(hr_max_bpm * 100) & 0xFFFF,
     )
+
+
+def pack_cmd_reset() -> bytes:
+    """Build payload for CMD_RESET (empty)."""
+    return b""
 
 
 def decode_event(msg_type: int, payload: bytes) -> dict[str, Any]:

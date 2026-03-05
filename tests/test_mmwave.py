@@ -14,7 +14,9 @@ from healthy_heartrate_breathing.tool_dispatcher import extract_sensor_state
 from healthy_heartrate_breathing.tools.core_tools import ToolDependencies
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmWave import MmWave
 from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+    EVT_ACK,
     EVT_BIO,
+    EVT_ERR,
     CMD_PING,
     EVT_DIAG,
     EVT_PONG,
@@ -22,13 +24,16 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     EVT_LIGHT,
     EVT_STATE,
     CMD_SET_HM,
+    ACK_OK,
     ERR_BAD_LEN,
+    ERR_RADAR_INIT_FAIL,
     EVT_TARGETS,
     CMD_SET_FOCUS,
     PROTO_VERSION,
     CMD_SET_BIO_MS,
     FEAT_LIGHT_SENSOR,
     CMD_SET_TARGETS_MS,
+    CMD_RESET,
     CMD_SET_GUARD_RAILS,
     ProtocolError,
     cobs_encode,
@@ -37,6 +42,7 @@ from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_pr
     encode_frame,
     crc16_ccitt_false,
     extract_encoded_frames,
+    pack_cmd_reset,
     pack_cmd_set_guard_rails,
 )
 
@@ -2511,3 +2517,41 @@ class TestCmdSetGuardRails:
         assert br_max == 6000
         assert hr_min == 2000
         assert hr_max == 30000
+
+
+class TestCmdResetProtocol:
+    """CMD_RESET encode/decode round-trip tests."""
+
+    def test_pack_cmd_reset_empty_payload(self):
+        payload = pack_cmd_reset()
+        assert payload == b""
+
+    def test_cmd_reset_constant_value(self):
+        assert CMD_RESET == 0x07
+
+    def test_err_radar_init_fail_constant(self):
+        assert ERR_RADAR_INIT_FAIL == 6
+
+    def test_cmd_reset_frame_roundtrip(self):
+        frame = encode_frame(CMD_RESET, pack_cmd_reset(), seq=42)
+        version, msg_type, seq, payload = decode_frame(frame[:-1])  # strip 0x00 delimiter
+        assert version == 1
+        assert msg_type == CMD_RESET
+        assert seq == 42
+        assert payload == b""
+
+    def test_ack_for_cmd_reset_decodes(self):
+        """EVT_ACK with cmd_id=CMD_RESET decodes correctly."""
+        payload = struct.pack("<BBi", CMD_RESET, ACK_OK, 0)
+        ev = decode_event(EVT_ACK, payload)
+        assert ev["type"] == "ack"
+        assert ev["cmd_id"] == CMD_RESET
+        assert ev["status_code"] == ACK_OK
+
+    def test_err_for_cmd_reset_decodes(self):
+        """EVT_ERR with cmd_id=CMD_RESET and ERR_RADAR_INIT_FAIL decodes."""
+        payload = struct.pack("<BB", CMD_RESET, ERR_RADAR_INIT_FAIL)
+        ev = decode_event(EVT_ERR, payload)
+        assert ev["type"] == "err"
+        assert ev["cmd_id"] == CMD_RESET
+        assert ev["err_code"] == ERR_RADAR_INIT_FAIL
