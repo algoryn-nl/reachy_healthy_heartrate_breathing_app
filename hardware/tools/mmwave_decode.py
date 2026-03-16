@@ -33,46 +33,109 @@ def _parse_hex_dump(raw: bytes) -> bytes:
     return bytes(int(token, 16) for token in tokens)
 
 
+def _fv(val: object, fmt: str = "{}", width: int = 0) -> str:
+    """Format a value, replacing None with a right-aligned dash."""
+    if val is None:
+        return f"{'-':>{max(width, 1)}}"
+    return f"{fmt.format(val):>{width}}" if width else fmt.format(val)
+
+
 def _format_pretty(event: dict, msg_type: int, seq: int) -> str:
     evt_type = event.get("type", "unknown")
-    if evt_type == "targets":
-        return (
-            f"seq={seq} type=targets n={event.get('n')} "
-            f"focus={event.get('focus')} truncated={event.get('targets_truncated')}"
-        )
-    if evt_type == "bio":
-        return (
-            f"seq={seq} type=bio allowed={event.get('allowed')} valid={event.get('valid')} "
-            f"br={event.get('br')} hr={event.get('hr')} "
-            f"br_new={event.get('br_new')} hr_new={event.get('hr_new')}"
-        )
+    prefix = f"{seq:>5} {evt_type:<7}"
+
     if evt_type == "state":
+        state = event.get("state", "?")
+        pose = event.get("pose", "?")
+        dist = event.get("dist_cm")
         return (
-            f"seq={seq} type=state state={event.get('state')} pose={event.get('pose')} "
-            f"human={event.get('human')} n_targets={event.get('n_targets')} dist_cm={event.get('dist_cm')} "
-            f"head_moving={event.get('head_moving')} dist_new={event.get('dist_new')}"
+            f"{prefix} {state:<15} {pose:<10}"
+            f" h={event.get('human', '?')} n={event.get('n_targets', '?')}"
+            f" d={_fv(dist, '{:.1f}', 5)}cm"
+            f" hm={event.get('head_moving', '?')} new={event.get('dist_new', '?')}"
         )
+
+    if evt_type == "targets":
+        n = event.get("n", 0)
+        focus = event.get("focus")
+        trunc = event.get("targets_truncated", False)
+        if focus:
+            parts = (
+                f"n={n}"
+                f"  r={focus.get('r', 0):>5.2f}"
+                f" θ={focus.get('bearing', 0):>6.1f}°"
+                f" xy=({focus.get('x', 0):>5.3f},{focus.get('y', 0):>5.3f})"
+                f" v={focus.get('v', 0):>4.1f}"
+            )
+        else:
+            parts = f"n={n}  (no focus)"
+        if trunc:
+            parts += " [TRUNC]"
+        return f"{prefix} {parts}"
+
+    if evt_type == "bio":
+        gate = "ok" if event.get("allowed") else "--"
+        valid = "ok" if event.get("valid") else "--"
+        flags = ""
+        if event.get("br_new"):
+            flags += " +br"
+        if event.get("hr_new"):
+            flags += " +hr"
+        return (
+            f"{prefix} {gate}/{valid:<2}"
+            f" br={_fv(event.get('br'), '{:.1f}', 5)}"
+            f" hr={_fv(event.get('hr'), '{:.1f}', 5)}"
+            f"{flags}"
+        )
+
     if evt_type == "light":
-        return f"seq={seq} type=light valid={event.get('valid')} lux={event.get('lux')}"
+        mark = " " if event.get("valid") else "!"
+        return f"{prefix}{mark}lux={_fv(event.get('lux'), '{:.1f}', 7)}"
+
+    if evt_type == "diag":
+        return (
+            f"{prefix}"
+            f" mmw_fail={event.get('mmwave_fail_count', '?')}"
+            f" consec={event.get('mmwave_consecutive_fails', '?')}"
+            f" tx_drop={event.get('tx_drop_count', '?')}"
+        )
+
     if evt_type == "pong":
-        return f"seq={seq} type=pong t_ms={event.get('t_ms')}"
+        return f"{prefix} t={event.get('t_ms')}ms"
+
     if evt_type == "hello":
-        return f"seq={seq} type=hello proto_version={event.get('proto_version')} feature_bits=0x{event.get('feature_bits', 0):04X}"
+        return f"{prefix} v={event.get('proto_version')} feat=0x{event.get('feature_bits', 0):04X}"
+
     if evt_type == "ack":
-        return f"seq={seq} type=ack cmd=0x{event.get('cmd_id', 0):02X} status={event.get('status_code')} value={event.get('value')}"
+        return (
+            f"{prefix} cmd=0x{event.get('cmd_id', 0):02X} status={event.get('status_code')} val={event.get('value')}"
+        )
+
     if evt_type == "err":
-        return f"seq={seq} type=err cmd=0x{event.get('cmd_id', 0):02X} err={event.get('err_code')}"
-    return f"seq={seq} msg_type=0x{msg_type:02X} event={event}"
+        return f"{prefix} cmd=0x{event.get('cmd_id', 0):02X} err={event.get('err_code')}"
+
+    return f"{prefix} msg_type=0x{msg_type:02X} {event}"
 
 
-def _emit_event(event: dict, msg_type: int, seq: int, fmt: str) -> None:
+def _emit_event(event: dict, msg_type: int, seq: int, fmt: str, allowed_types: set[str] | None) -> None:
+    evt_type = event.get("type")
+    if evt_type is None:
+        return
+    if allowed_types is not None and evt_type not in allowed_types:
+        return
     if fmt == "json":
         print(json.dumps({"seq": seq, "msg_type": msg_type, "event": event}, ensure_ascii=True))
         return
     print(_format_pretty(event, msg_type, seq))
 
 
-def _consume_bytes(buffer: bytearray, data: bytes, fmt: str, show_bad_frames: bool) -> None:
+def _consume_bytes(
+    buffer: bytearray,
+    data: bytes,
+    fmt: str,
+    show_bad_frames: bool,
+    allowed_types: set[str] | None,
+) -> None:
     buffer.extend(data)
     for encoded in extract_encoded_frames(buffer):
         try:
@@ -87,7 +150,7 @@ def _consume_bytes(buffer: bytearray, data: bytes, fmt: str, show_bad_frames: bo
             if show_bad_frames:
                 print(f"[bad-frame] unsupported version {version}", file=sys.stderr)
             continue
-        _emit_event(event, msg_type, seq, fmt)
+        _emit_event(event, msg_type, seq, fmt, allowed_types)
 
 
 def _iter_file_chunks(input_file: Path) -> Iterable[bytes]:
@@ -98,13 +161,13 @@ def _iter_file_chunks(input_file: Path) -> Iterable[bytes]:
         yield raw
 
 
-def _decode_file(input_file: Path, fmt: str, show_bad_frames: bool) -> None:
+def _decode_file(input_file: Path, fmt: str, show_bad_frames: bool, allowed_types: set[str] | None) -> None:
     buffer = bytearray()
     for chunk in _iter_file_chunks(input_file):
-        _consume_bytes(buffer, chunk, fmt, show_bad_frames)
+        _consume_bytes(buffer, chunk, fmt, show_bad_frames, allowed_types)
 
 
-def _decode_serial(port: str, baud: int, fmt: str, show_bad_frames: bool) -> None:
+def _decode_serial(port: str, baud: int, fmt: str, show_bad_frames: bool, allowed_types: set[str] | None) -> None:
     try:
         import serial
     except ModuleNotFoundError as exc:  # pragma: no cover - runtime environment dependent
@@ -119,7 +182,7 @@ def _decode_serial(port: str, baud: int, fmt: str, show_bad_frames: bool) -> Non
                 chunk = ser.read(read_size)
                 if not chunk:
                     continue
-                _consume_bytes(buffer, chunk, fmt, show_bad_frames)
+                _consume_bytes(buffer, chunk, fmt, show_bad_frames, allowed_types)
         except KeyboardInterrupt:
             return
 
@@ -127,19 +190,44 @@ def _decode_serial(port: str, baud: int, fmt: str, show_bad_frames: bool) -> Non
 def main() -> int:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(description="Decode mmWave binary protocol frames.")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--port", help="Serial device path, e.g. /dev/cu.usbmodem1234")
-    source.add_argument("--input-file", type=Path, help="Capture file path (raw bytes or hex dump text)")
+    parser.add_argument("--port", help="Serial device path (auto-detected in TUI mode)")
+    parser.add_argument("--input-file", type=Path, help="Capture file path (raw bytes or hex dump text)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default: 115200)")
-    parser.add_argument("--format", choices=["pretty", "json"], default="pretty")
+    parser.add_argument("--format", choices=["tui", "pretty", "json"], default="tui")
     parser.add_argument("--show-bad-frames", action="store_true", help="Print decode errors to stderr")
+    parser.add_argument(
+        "--filter",
+        help="Comma-separated event types to show (e.g. bio,state,light). Default: all.",
+    )
     args = parser.parse_args()
 
-    if args.input_file is not None:
-        _decode_file(args.input_file, args.format, args.show_bad_frames)
+    if args.port is not None and args.input_file is not None:
+        parser.error("--port and --input-file are mutually exclusive")
+
+    allowed_types: set[str] | None = None
+    if args.filter:
+        allowed_types = {t.strip() for t in args.filter.split(",") if t.strip()}
+
+    if args.format == "tui":
+        from mmwave_monitor import MmwaveMonitorApp
+
+        app = MmwaveMonitorApp(
+            port=args.port,
+            baud=args.baud,
+            filter_types=allowed_types,
+            input_file=args.input_file,
+        )
+        app.run()
         return 0
 
-    _decode_serial(args.port, args.baud, args.format, args.show_bad_frames)
+    if args.port is None and args.input_file is None:
+        parser.error("--port or --input-file is required for --format pretty/json")
+
+    if args.input_file is not None:
+        _decode_file(args.input_file, args.format, args.show_bad_frames, allowed_types)
+        return 0
+
+    _decode_serial(args.port, args.baud, args.format, args.show_bad_frames, allowed_types)
     return 0
 
 
