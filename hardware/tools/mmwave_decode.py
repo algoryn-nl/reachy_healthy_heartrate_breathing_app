@@ -96,8 +96,8 @@ def _format_pretty(event: dict, msg_type: int, seq: int) -> str:
         return (
             f"{prefix}"
             f" mmw_fail={event.get('mmwave_fail_count', '?')}"
-            f" consec={event.get('consecutive_fails', '?')}"
-            f" tx_drop={event.get('tx_drops', '?')}"
+            f" consec={event.get('mmwave_consecutive_fails', '?')}"
+            f" tx_drop={event.get('tx_drop_count', '?')}"
         )
 
     if evt_type == "pong":
@@ -190,11 +190,10 @@ def _decode_serial(port: str, baud: int, fmt: str, show_bad_frames: bool, allowe
 def main() -> int:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(description="Decode mmWave binary protocol frames.")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--port", help="Serial device path, e.g. /dev/cu.usbmodem1234")
-    source.add_argument("--input-file", type=Path, help="Capture file path (raw bytes or hex dump text)")
+    parser.add_argument("--port", help="Serial device path (auto-detected in TUI mode)")
+    parser.add_argument("--input-file", type=Path, help="Capture file path (raw bytes or hex dump text)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default: 115200)")
-    parser.add_argument("--format", choices=["pretty", "json"], default="pretty")
+    parser.add_argument("--format", choices=["tui", "pretty", "json"], default="tui")
     parser.add_argument("--show-bad-frames", action="store_true", help="Print decode errors to stderr")
     parser.add_argument(
         "--filter",
@@ -202,9 +201,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.port is not None and args.input_file is not None:
+        parser.error("--port and --input-file are mutually exclusive")
+
     allowed_types: set[str] | None = None
     if args.filter:
         allowed_types = {t.strip() for t in args.filter.split(",") if t.strip()}
+
+    if args.format == "tui":
+        from mmwave_monitor import MmwaveMonitorApp
+
+        app = MmwaveMonitorApp(
+            port=args.port,
+            baud=args.baud,
+            filter_types=allowed_types,
+            input_file=args.input_file,
+        )
+        app.run()
+        return 0
+
+    if args.port is None and args.input_file is None:
+        parser.error("--port or --input-file is required for --format pretty/json")
 
     if args.input_file is not None:
         _decode_file(args.input_file, args.format, args.show_bad_frames, allowed_types)
