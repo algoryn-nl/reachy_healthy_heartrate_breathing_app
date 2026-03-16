@@ -22,6 +22,8 @@ from healthy_heartrate_breathing.sensor_models import (
     TimeSeriesBuffer,
     StateTransitionLog,
     BioAcceptanceTracker,
+    read_events,
+    event_from_dict,
 )
 
 
@@ -251,3 +253,125 @@ class TestEventRates:
     def test_unknown_type_zero(self) -> None:
         rates = EventRates(window_s=10.0)
         assert rates.rate("bio", time.monotonic()) == 0.0
+
+
+class TestEventFromDict:
+    def test_state_event(self) -> None:
+        d = {
+            "type": "state",
+            "t_ms": 100,
+            "state": "MOVING",
+            "pose": "STANDING",
+            "human": 1,
+            "n_targets": 1,
+            "dist_cm": 80.0,
+            "head_moving": 0,
+            "dist_new": 1,
+        }
+        ev = event_from_dict(d, seq=5)
+        assert ev.event_type == "state"
+        assert isinstance(ev.data, SensorSnapshot)
+        assert ev.data.state == "MOVING"
+
+    def test_bio_event(self) -> None:
+        d = {
+            "type": "bio",
+            "t_ms": 200,
+            "hr": 83.0,
+            "br": 6.0,
+            "allowed": 1,
+            "valid": 1,
+            "hr_new": 1,
+            "br_new": 1,
+        }
+        ev = event_from_dict(d, seq=6)
+        assert isinstance(ev.data, BioReading)
+        assert ev.data.hr == 83.0
+
+    def test_light_event(self) -> None:
+        d = {"type": "light", "t_ms": 300, "lux": 21.7, "valid": 1}
+        ev = event_from_dict(d, seq=7)
+        assert isinstance(ev.data, LightReading)
+
+    def test_targets_event(self) -> None:
+        d = {
+            "type": "targets",
+            "t_ms": 400,
+            "n": 1,
+            "n_targets": 1,
+            "forced_focus": 0,
+            "focus": {"cluster": 1, "x": 0.1, "y": 0.4, "r": 0.41, "bearing": 14.0, "v": 0.0},
+            "targets": [{"cluster": 1, "x": 0.1, "y": 0.4, "r": 0.41, "bearing": 14.0, "v": 0.0}],
+            "targets_truncated": False,
+        }
+        ev = event_from_dict(d, seq=8)
+        assert isinstance(ev.data, TargetsEvent)
+        assert ev.data.focus is not None
+        assert ev.data.focus.velocity == 0.0  # mapped from "v"
+
+    def test_targets_no_focus(self) -> None:
+        d = {
+            "type": "targets",
+            "t_ms": 400,
+            "n": 0,
+            "n_targets": 0,
+            "forced_focus": 0,
+            "focus": None,
+            "targets": [],
+            "targets_truncated": False,
+        }
+        ev = event_from_dict(d, seq=9)
+        assert isinstance(ev.data, TargetsEvent)
+        assert ev.data.focus is None
+
+    def test_diag_event(self) -> None:
+        d = {
+            "type": "diag",
+            "t_ms": 500,
+            "mmwave_fail_count": 3,
+            "mmwave_consecutive_fails": 1,
+            "tx_drop_count": 0,
+        }
+        ev = event_from_dict(d, seq=10)
+        assert isinstance(ev.data, DiagCounters)
+
+    def test_unknown_event_passes_through(self) -> None:
+        d = {"type": "pong", "t_ms": 600}
+        ev = event_from_dict(d, seq=11)
+        assert ev.event_type == "pong"
+        assert isinstance(ev.data, dict)
+
+
+class TestReadEvents:
+    @pytest.mark.asyncio
+    async def test_read_events_yields_decoded_events(self) -> None:
+        """read_events wraps serial decode loop into async DecodedEvent stream."""
+        fake_events: list[dict] = [  # type: ignore[type-arg]
+            {
+                "type": "state",
+                "t_ms": 100,
+                "state": "MOVING",
+                "pose": "STANDING",
+                "human": 1,
+                "n_targets": 1,
+                "dist_cm": 80.0,
+                "head_moving": 0,
+                "dist_new": 1,
+            },
+            {
+                "type": "bio",
+                "t_ms": 200,
+                "hr": 83.0,
+                "br": 6.0,
+                "allowed": 1,
+                "valid": 1,
+                "hr_new": 1,
+                "br_new": 1,
+            },
+        ]
+        results = []
+        async for ev in read_events(port=None, baud=115200, _test_events=fake_events):
+            results.append(ev)
+        assert len(results) == 2
+        assert results[0].event_type == "state"
+        assert results[1].event_type == "bio"

@@ -6,7 +6,9 @@ from mmwave_protocol.decode_event().
 """
 
 from __future__ import annotations
-from typing import Iterator
+import time as _time
+import asyncio
+from typing import Iterator, AsyncIterator
 from collections import deque
 from dataclasses import dataclass
 
@@ -264,3 +266,122 @@ class EventRates:
         while q and q[0] < cutoff:
             q.popleft()
         return len(q) / self._window_s
+
+
+# ---------------------------------------------------------------------------
+# Dict-to-model converter and async serial reader
+# ---------------------------------------------------------------------------
+
+
+def _target_from_dict(d: dict) -> TargetInfo:  # type: ignore[type-arg]
+    """Convert a protocol target dict to a TargetInfo dataclass."""
+    return TargetInfo(
+        cluster=d["cluster"],
+        x=d["x"],
+        y=d["y"],
+        r=d["r"],
+        bearing=d["bearing"],
+        velocity=d["v"],
+    )
+
+
+def event_from_dict(raw: dict, seq: int) -> DecodedEvent:  # type: ignore[type-arg]
+    """Convert a protocol decode_event() dict into a typed DecodedEvent."""
+    evt_type = raw.get("type", "unknown")
+    host_ts = _time.monotonic()
+    data: SensorSnapshot | BioReading | LightReading | TargetsEvent | DiagCounters | dict
+
+    if evt_type == "state":
+        data = SensorSnapshot(
+            t_ms=raw["t_ms"],
+            state=raw["state"],
+            pose=raw["pose"],
+            human=raw["human"],
+            n_targets=raw["n_targets"],
+            dist_cm=raw.get("dist_cm"),
+            head_moving=raw["head_moving"],
+            dist_new=raw["dist_new"],
+        )
+    elif evt_type == "bio":
+        data = BioReading(
+            hr=raw.get("hr"),
+            br=raw.get("br"),
+            allowed=raw["allowed"],
+            valid=raw["valid"],
+            hr_new=raw["hr_new"],
+            br_new=raw["br_new"],
+        )
+    elif evt_type == "light":
+        data = LightReading(lux=raw.get("lux"), valid=raw["valid"])
+    elif evt_type == "targets":
+        focus_dict = raw.get("focus")
+        focus = _target_from_dict(focus_dict) if focus_dict else None
+        targets = [_target_from_dict(t) for t in raw.get("targets", [])]
+        data = TargetsEvent(
+            n_targets=raw.get("n_targets", raw.get("n", 0)),
+            forced_focus=raw.get("forced_focus", 0),
+            focus=focus,
+            targets=targets,
+            targets_truncated=raw.get("targets_truncated", False),
+        )
+    elif evt_type == "diag":
+        data = DiagCounters(
+            mmwave_fail_count=raw["mmwave_fail_count"],
+            mmwave_consecutive_fails=raw["mmwave_consecutive_fails"],
+            tx_drop_count=raw["tx_drop_count"],
+        )
+    else:
+        data = raw
+
+    return DecodedEvent(event_type=evt_type, host_ts=host_ts, seq=seq, data=data)
+
+
+async def read_events(
+    port: str | None,
+    baud: int = 115200,
+    *,
+    _test_events: list[dict] | None = None,  # type: ignore[type-arg]
+) -> AsyncIterator[DecodedEvent]:
+    """Async generator yielding DecodedEvents from serial or test data.
+
+    Uses asyncio.to_thread() for blocking serial reads, matching mmWave.py pattern.
+    Pass _test_events for testing without hardware.
+    """
+    if _test_events is not None:
+        for i, raw in enumerate(_test_events):
+            yield event_from_dict(raw, seq=i)
+        return
+
+    import serial as _serial
+
+    from healthy_heartrate_breathing.profiles._healthy_heartrate_breathing_locked_profile.mmwave_protocol import (
+        PROTO_VERSION,
+        ProtocolError,
+        decode_event,
+        decode_frame,
+        extract_encoded_frames,
+    )
+
+    ser = _serial.Serial(port, baud, timeout=0.2)
+    buf = bytearray()
+    seq = 0
+    try:
+        while True:
+            chunk = await asyncio.to_thread(ser.read, max(ser.in_waiting, 1))
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            for encoded in extract_encoded_frames(buf):
+                try:
+                    version, msg_type, _seq_wire, payload = decode_frame(encoded)
+                    if version != PROTO_VERSION:
+                        continue
+                    raw = decode_event(msg_type, payload)
+                except ProtocolError:
+                    continue
+                yield event_from_dict(raw, seq=seq)
+                seq += 1
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        ser.close()
