@@ -4,16 +4,24 @@
 from __future__ import annotations
 import time
 
+import pytest
+
 from healthy_heartrate_breathing.sensor_models import (
     BioReading,
+    EventRates,
     FrameStats,
     TargetInfo,
+    EventBuffer,
     DecodedEvent,
     DiagCounters,
     LightReading,
     TargetsEvent,
+    NotableFilter,
     ConnectionInfo,
     SensorSnapshot,
+    TimeSeriesBuffer,
+    StateTransitionLog,
+    BioAcceptanceTracker,
 )
 
 
@@ -117,3 +125,129 @@ class TestDataModels:
         ev = DecodedEvent(event_type="state", host_ts=time.monotonic(), seq=42, data=snap)
         assert ev.event_type == "state"
         assert isinstance(ev.data, SensorSnapshot)
+
+
+class TestEventBuffer:
+    def test_append_and_iter(self) -> None:
+        buf = EventBuffer(max_size=3)
+        for i in range(3):
+            buf.append(DecodedEvent("state", float(i), i, {}))
+        assert len(buf) == 3
+
+    def test_overflow_drops_oldest(self) -> None:
+        buf = EventBuffer(max_size=2)
+        for i in range(5):
+            buf.append(DecodedEvent("state", float(i), i, {}))
+        assert len(buf) == 2
+        items = list(buf)
+        assert items[0].seq == 3
+
+    def test_clear(self) -> None:
+        buf = EventBuffer(max_size=10)
+        buf.append(DecodedEvent("state", 0.0, 0, {}))
+        buf.clear()
+        assert len(buf) == 0
+
+
+class TestNotableFilter:
+    def test_state_transition_is_notable(self) -> None:
+        f = NotableFilter()
+        snap1 = SensorSnapshot(0, "STILL_NEAR", "SITTING", 1, 1, 40.0, 0, 1)
+        snap2 = SensorSnapshot(0, "MOVING", "STANDING", 1, 1, 50.0, 0, 1)
+        # First event sets baseline -- not notable (no transition)
+        assert not f.is_notable(DecodedEvent("state", 0.0, 1, snap1))
+        assert f.is_notable(DecodedEvent("state", 1.0, 2, snap2))  # transition
+
+    def test_same_state_not_notable(self) -> None:
+        f = NotableFilter()
+        snap = SensorSnapshot(0, "STILL_NEAR", "SITTING", 1, 1, 40.0, 0, 1)
+        f.is_notable(DecodedEvent("state", 0.0, 1, snap))
+        assert not f.is_notable(DecodedEvent("state", 1.0, 2, snap))
+
+    def test_bio_with_new_values_notable(self) -> None:
+        f = NotableFilter()
+        bio = BioReading(hr=83.0, br=6.0, allowed=1, valid=1, hr_new=1, br_new=1)
+        assert f.is_notable(DecodedEvent("bio", 0.0, 1, bio))
+
+    def test_bio_without_new_values_not_notable(self) -> None:
+        f = NotableFilter()
+        bio = BioReading(hr=83.0, br=6.0, allowed=1, valid=1, hr_new=0, br_new=0)
+        assert not f.is_notable(DecodedEvent("bio", 0.0, 1, bio))
+
+    def test_light_significant_change_notable(self) -> None:
+        f = NotableFilter()
+        f.is_notable(DecodedEvent("light", 0.0, 1, LightReading(lux=100.0, valid=1)))
+        assert f.is_notable(DecodedEvent("light", 1.0, 2, LightReading(lux=90.0, valid=1)))  # 10 lux delta > 5
+
+    def test_light_small_change_not_notable(self) -> None:
+        f = NotableFilter()
+        f.is_notable(DecodedEvent("light", 0.0, 1, LightReading(lux=100.0, valid=1)))
+        assert not f.is_notable(DecodedEvent("light", 1.0, 2, LightReading(lux=98.0, valid=1)))  # 2 lux < 5
+
+    def test_error_events_always_notable(self) -> None:
+        f = NotableFilter()
+        assert f.is_notable(DecodedEvent("err", 0.0, 1, {"cmd_id": 1, "err_code": 2}))
+
+
+class TestBioAcceptanceTracker:
+    def test_acceptance_rate(self) -> None:
+        t = BioAcceptanceTracker()
+        t.record(allowed=1, valid=1)
+        t.record(allowed=1, valid=0)
+        t.record(allowed=0, valid=0)
+        assert t.acceptance_rate() == pytest.approx(1 / 3)
+
+    def test_empty(self) -> None:
+        t = BioAcceptanceTracker()
+        assert t.acceptance_rate() == 0.0
+
+
+class TestStateTransitionLog:
+    def test_transitions(self) -> None:
+        log = StateTransitionLog()
+        log.record("STILL_NEAR", 1.0)
+        log.record("MOVING", 3.0)
+        log.record("STILL_NEAR", 5.0)
+        transitions = log.transitions()
+        assert len(transitions) == 3
+        assert transitions[0] == ("STILL_NEAR", 1.0, 2.0)  # state, start, duration
+        assert transitions[1] == ("MOVING", 3.0, 2.0)
+
+    def test_no_transitions(self) -> None:
+        log = StateTransitionLog()
+        assert log.transitions() == []
+
+
+class TestTimeSeriesBuffer:
+    def test_append_and_len(self) -> None:
+        buf = TimeSeriesBuffer(max_size=100)
+        buf.append(1.0, 83.0, "STILL_NEAR")
+        buf.append(2.0, 84.0, "STILL_NEAR")
+        assert len(buf) == 2
+
+    def test_overflow(self) -> None:
+        buf = TimeSeriesBuffer(max_size=3)
+        for i in range(5):
+            buf.append(float(i), float(60 + i), "STILL_NEAR")
+        assert len(buf) == 3
+
+    def test_values(self) -> None:
+        buf = TimeSeriesBuffer(max_size=10)
+        buf.append(1.0, 80.0, "STILL_NEAR")
+        buf.append(2.0, 85.0, "MOVING")
+        timestamps, values, states = buf.get_series()
+        assert values == [80.0, 85.0]
+        assert states == ["STILL_NEAR", "MOVING"]
+
+
+class TestEventRates:
+    def test_record_and_rate(self) -> None:
+        rates = EventRates(window_s=10.0)
+        now = time.monotonic()
+        for _ in range(10):
+            rates.record("state", now)
+        assert rates.rate("state", now) == pytest.approx(10.0 / 10.0, abs=0.5)
+
+    def test_unknown_type_zero(self) -> None:
+        rates = EventRates(window_s=10.0)
+        assert rates.rate("bio", time.monotonic()) == 0.0
