@@ -14,7 +14,7 @@ name = "Pollen Robotics"
 email = "contact@pollen-robotics.com"
 
 [dependency-groups]
-dev = [ "pytest", "pytest-asyncio", "ruff==0.12.0", "mypy==1.18.2", "pre-commit", "types-requests", "python-semantic-release>=10.5.3",]
+dev = [ "pytest", "pytest-asyncio", "ruff==0.12.0", "mypy==1.18.2", "pre-commit", "types-requests", "python-semantic-release>=10.5.3", "textual>=0.80.0", "textual-plotext>=0.3.0",]
 
 [project.optional-dependencies]
 reachy_mini_wireless = [ "PyGObject>=3.42.2,<=3.46.0", "gst-signalling>=1.1.2",]
