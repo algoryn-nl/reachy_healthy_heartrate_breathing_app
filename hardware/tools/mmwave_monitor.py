@@ -59,13 +59,12 @@ class MmwaveMonitorApp(App):
 
     #main-top-row {
         width: 100%;
-        height: auto;
-        max-height: 50%;
+        height: 1fr;
     }
 
     #state-panel {
         width: 1fr;
-        min-width: 30;
+        min-width: 28;
         height: 100%;
     }
 
@@ -73,11 +72,13 @@ class MmwaveMonitorApp(App):
         width: 2fr;
         min-width: 40;
         height: 100%;
+        overflow-y: hidden;
     }
 
     #vitals-panel {
-        height: 1fr;
-        min-height: 10;
+        height: auto;
+        max-height: 16;
+        min-height: 8;
     }
 
     #log-panel {
