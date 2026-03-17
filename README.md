@@ -204,6 +204,7 @@ src/healthy_heartrate_breathing/
   tool_dispatcher.py        -- non-blocking tool dispatch with timeout, serialisation, sensor state extraction, and device_context enrichment
   transcript_handler.py     -- partial transcript debouncing and completed transcript output routing
   light_orchestrator.py     -- lux delta tracking, auto light_context dispatch after mmWave
+  sensor_models.py          -- shared sensor data models and event processing
   tools/
     core_tools.py           -- Tool base class, registry, dispatcher
   profiles/
@@ -239,3 +240,16 @@ When running with `--gradio`, the web UI shows a real-time sensor dashboard:
 - **Conversation log**: chatbot transcript in a collapsed accordion
 
 The dashboard connects via WebSocket (`/ws/sensor`) for instant updates, fetches historical data from `/api/vitals/history`, and loads trend summaries from `/api/vitals/trends`.
+
+## TUI Monitor (Terminal)
+
+A Textual-based terminal UI for real-time sensor monitoring during hardware development and debugging:
+
+```bash
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX             # TUI (default)
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --format pretty  # fixed-width text
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --format json    # JSON lines
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --filter EVT_BIO,EVT_STATE
+```
+
+The TUI displays five panels: device state overview, top-down radar view of detected targets, rolling vitals charts (HR/BR), scrolling event log with notable event filtering, and firmware diagnostics. Requires `textual` and `textual-plotext` (included in the `dev` dependency group).

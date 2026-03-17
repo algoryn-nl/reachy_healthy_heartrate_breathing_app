@@ -8,6 +8,13 @@ Completed work archived in `docs/DONE.md`. Detailed history in `docs/20260223_ro
 
 (nothing actively in-progress)
 
+### Done (recent)
+
+- [x] TUI monitor for mmWave sensor (`hardware/tools/mmwave_monitor.py`) — Textual app with state, radar, vitals, log, diagnostics panels (2026-03-17)
+- [x] Shared sensor data models (`sensor_models.py`) — dataclasses, EventBuffer, NotableFilter, BioAcceptanceTracker, read_events async iterator (2026-03-17)
+- [x] `mmwave_decode.py` improvements — `--format tui` as default, `--filter` option, fixed-width pretty format, diag field name bug fix (2026-03-17)
+- [x] 650 tests total (99 new: test_sensor_models.py, test_mmwave_monitor.py) (2026-03-17)
+
 ### Upcoming
 
 See `docs/20260223_roadmap.md` > Aspirational (beyond v0.4) for future directions.

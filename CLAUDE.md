@@ -42,7 +42,11 @@ pytest tests/test_mmwave.py      # single file
 pytest tests/test_mmwave.py -k test_name  # single test
 
 # Hardware decode tool
-uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --format pretty
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX             # TUI monitor (default)
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --format tui     # explicit TUI
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --format pretty  # fixed-width text
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --format json    # JSON lines
+uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --filter EVT_BIO,EVT_STATE  # event filter
 ```
 
 ## Architecture
@@ -233,7 +237,8 @@ The project includes a custom hardware component under `hardware/`.
 - Tool: `profiles/_healthy_heartrate_breathing_locked_profile/mmWave.py` — modes: `scan`, `measure`, `locate_and_measure`; runs serial I/O in `asyncio.to_thread`
   - Serial port auto-detection: three-tier strategy (VID/PID `0x303A:0x1001` → glob fallback → HELLO probe with `CMD_PING`/`EVT_PONG` or DTR reset → `EVT_HELLO`)
   - Protocol version handshake: `_handshake_version()` sends `CMD_PING` at session start and validates the first response frame's version byte; fails fast with `status: "version_mismatch"` on mismatch or timeout (defense-in-depth: `_poll_events()` still drops and warns on mismatched frames)
-- Decode utility: `hardware/tools/mmwave_decode.py` — CLI for live serial or capture file decoding (`--format pretty|json`)
+- Decode utility: `hardware/tools/mmwave_decode.py` — CLI for live serial or capture file decoding (`--format tui` default, `--format pretty|json` for scripting, `--filter` for event filtering)
+- TUI monitor: `hardware/tools/mmwave_monitor.py` — Textual-based terminal UI with live state panel, radar view, vitals charts, log panel, and diagnostics tab (uses widgets from `hardware/tools/widgets/`)
 
 **Idle scanning policy** (in `ToolDispatcher` via `IdlePolicy`; state diagram in `idle_policy.py` module docstring):
 - Calm periodic mmWave probing when the robot is idle
@@ -276,6 +281,30 @@ When running with `--gradio`, these endpoints are mounted on the Gradio ASGI app
 - Outputs context state, recommended conversation mode, and action suggestions
 - SQLite analytics storage (when `HEALTHY_LIGHT_ANALYTICS_ENABLED` is true); time-based retention via `HEALTHY_LIGHT_ANALYTICS_MAX_AGE_DAYS` (default 90); schema version 2 with `PRAGMA user_version` migration
 
+### Sensor Models (Shared Data Layer)
+
+`sensor_models.py` provides shared data models and event processing used by both the TUI monitor and the main app:
+
+- **Dataclasses**: `SensorState`, `TargetInfo`, `BioReading`, `DiagCounters` — typed representations of mmWave events
+- **EventBuffer**: Ring buffer for decoded events with configurable capacity
+- **NotableFilter**: Filters significant events (state changes, bio readings, errors) from the event stream
+- **BioAcceptanceTracker**: Tracks bio reading acceptance/rejection statistics
+- **StateTransitionLog**: Records device state transitions with timestamps
+- **TimeSeriesBuffer**: Fixed-capacity time-series buffer for vitals charting
+- **EventRates**: Tracks per-event-type rates for diagnostics
+- **`event_from_dict()`**: Converts raw decoded dicts into typed dataclasses
+- **`read_events()`**: Async iterator over serial port frames using `mmwave_protocol`
+
+### TUI Monitor (`hardware/tools/mmwave_monitor.py`)
+
+A Textual-based terminal UI for real-time mmWave sensor monitoring, launched via `mmwave_decode.py --format tui` (the default format). Provides five widget panels:
+
+- **State panel** (`widgets/state_panel.py`): Device state, target count, lux, bio acceptance stats
+- **Radar panel** (`widgets/radar_panel.py`): Top-down ASCII radar view of detected targets with range rings
+- **Vitals panel** (`widgets/vitals_panel.py`): Rolling textual-plotext charts for heart rate and breathing rate
+- **Log panel** (`widgets/log_panel.py`): Scrolling event log with notable event filtering
+- **Diagnostics panel** (`widgets/diag_panel.py`): Firmware diagnostic counters (mmWave fails, TX drops, consecutive errors)
+
 ### Key Dependencies
 
 - `reachy_mini` / `reachy_mini_toolbox` / `reachy_mini_dances_library` — robot SDK and motion assets
@@ -288,7 +317,7 @@ When running with `--gradio`, these endpoints are mounted on the Gradio ASGI app
 - `scipy` — audio resampling
 
 Optional dependency groups (install with `uv sync --group dev` or `pip install '.[group]'`):
-- `dev` — pytest, pytest-asyncio, ruff, mypy, pre-commit, python-semantic-release
+- `dev` — pytest, pytest-asyncio, ruff, mypy, pre-commit, python-semantic-release, textual, textual-plotext
 - `local_vision` — torch, transformers, num2words
 - `yolo_vision` — ultralytics, supervision
 - `mediapipe_vision` — mediapipe
@@ -313,6 +342,7 @@ src/healthy_heartrate_breathing/
   vitals_store.py           -- VitalsStore: SQLite append-only vitals history with rolling window pruning
   vitals_aggregator.py      -- VitalsAggregator: hourly/daily rollup from raw vitals
   trend_analyzer.py         -- TrendAnalyzer: stateless trend analysis, anomaly detection
+  sensor_models.py          -- shared sensor data models, EventBuffer, NotableFilter, BioAcceptanceTracker, event_from_dict, read_events
   sensor_ws.py              -- SensorBroadcaster: WebSocket client management and broadcast
   console.py                -- LocalStream: headless bidirectional audio, settings UI, REST endpoints
   headless_personality.py   -- filesystem helpers for headless personality management
@@ -376,6 +406,8 @@ tests/
   test_vitals_aggregator.py -- VitalsAggregator rollup and pruning tests
   test_trend_analyzer.py    -- TrendAnalyzer anomaly detection and summary tests
   test_vitals_trends.py     -- vitals_trends tool integration tests
+  test_sensor_models.py     -- sensor_models dataclasses, EventBuffer, NotableFilter, BioAcceptanceTracker tests
+  test_mmwave_monitor.py    -- TUI monitor widget and app tests
   audio/                    -- audio subsystem tests
   vision/                   -- vision subsystem tests
 
@@ -389,7 +421,14 @@ hardware/
     reachy_codec_shim.c     -- ctypes shim exporting reachy_codec.h functions
     Makefile                -- builds libreachy_codec shared library
   tools/
-    mmwave_decode.py        -- CLI decode utility for serial/capture files
+    mmwave_decode.py        -- CLI decode utility (--format tui|pretty|json, --filter)
+    mmwave_monitor.py       -- Textual TUI app: state, radar, vitals charts, log, diagnostics
+    widgets/                -- TUI widget panels
+      state_panel.py        -- device state and bio acceptance stats
+      radar_panel.py        -- top-down ASCII radar view
+      vitals_panel.py       -- rolling HR/BR charts (textual-plotext)
+      log_panel.py          -- scrolling event log with notable filter
+      diag_panel.py         -- firmware diagnostic counters
 
 docs/
   TODO.md                   -- development log, task tracker, technical debt notes
@@ -500,7 +539,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (551 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, SensorBroadcaster WebSocket tests, VitalsAggregator rollup/pruning tests, TrendAnalyzer anomaly detection tests, and vitals_trends tool integration tests)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (650 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, SensorBroadcaster WebSocket tests, VitalsAggregator rollup/pruning tests, TrendAnalyzer anomaly detection tests, vitals_trends tool integration tests, sensor_models dataclass/buffer/filter tests, and TUI monitor widget/app tests)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

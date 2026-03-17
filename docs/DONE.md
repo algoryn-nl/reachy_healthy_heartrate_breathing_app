@@ -2,6 +2,12 @@
 
 For detailed descriptions of each item, see `docs/20260223_roadmap.md` (Resolved section + Phase 1–4 + Future Vision > Completed).
 
+## Features (2026-03-17)
+
+- **HW-FEAT-1**: TUI monitor for mmWave sensor — Textual app with state panel, radar view, vitals charts, log panel, diagnostics tab (`hardware/tools/mmwave_monitor.py` + `widgets/`)
+- **PY-FEAT-3**: Shared sensor data models (`sensor_models.py`) — dataclasses, EventBuffer, NotableFilter, BioAcceptanceTracker, read_events async iterator
+- **HW-FIX-1**: `mmwave_decode.py` — `--format tui` as default, `--filter` option, fixed-width pretty format, diag field name bug fix
+
 ## Features (2026-03-05)
 
 - **PY-FEAT-1**: Gradio sensor dashboard (vitals card, radar canvas, vitals history, WebSocket push, VitalsStore)
@@ -33,8 +39,9 @@ For detailed descriptions of each item, see `docs/20260223_roadmap.md` (Resolved
 
 ## Test Coverage Milestones
 
+- 650 total tests as of 2026-03-17 (99 new: sensor_models, TUI monitor)
 - 551 total tests as of 2026-03-05
-- AudioRouter, TranscriptHandler, ToolDispatcher, IdlePolicy, LightOrchestrator, HeadWobbler, MovementManager, mmWave protocol, openai_realtime, VitalsStore, SensorBroadcaster, path traversal security, firmware codec cross-validation
+- AudioRouter, TranscriptHandler, ToolDispatcher, IdlePolicy, LightOrchestrator, HeadWobbler, MovementManager, mmWave protocol, openai_realtime, VitalsStore, SensorBroadcaster, path traversal security, firmware codec cross-validation, sensor_models, TUI monitor widgets
 
 ## Infrastructure (2026-02-23 – 2026-02-24)
 
