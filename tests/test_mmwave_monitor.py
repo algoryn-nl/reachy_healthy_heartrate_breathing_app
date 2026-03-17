@@ -87,13 +87,14 @@ class TestAppSkeleton:
             assert tc.active == "main"
 
     @pytest.mark.asyncio
-    async def test_header_shows_no_sensor(self) -> None:
-        """Header subtitle shows 'no sensor connected' when port is None."""
+    async def test_header_shows_no_sensor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Header subtitle shows retry message when port is None and auto-detect fails."""
         from mmwave_monitor import MmwaveMonitorApp
 
+        monkeypatch.setattr(MmwaveMonitorApp, "_try_auto_detect", lambda self: None)
         app = MmwaveMonitorApp(port=None)
         async with app.run_test() as _pilot:
-            assert app.sub_title == "no sensor connected"
+            assert "no sensor" in app.sub_title
 
     @pytest.mark.asyncio
     async def test_header_shows_port(self) -> None:
