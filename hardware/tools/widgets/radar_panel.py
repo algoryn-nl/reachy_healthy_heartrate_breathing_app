@@ -341,8 +341,8 @@ def _render_target_list(data: RadarData) -> Text:
 # RadarPanel Widget (container: radar canvas + target list)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_CHAR_WIDTH = 30
-_DEFAULT_CHAR_HEIGHT = 12
+_DEFAULT_CHAR_WIDTH = 40
+_DEFAULT_CHAR_HEIGHT = 18
 
 
 class _RadarCanvas(Static):

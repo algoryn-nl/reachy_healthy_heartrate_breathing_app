@@ -49,10 +49,18 @@ class MmwaveMonitorApp(App):
         background: $surface;
     }
 
+    TabbedContent {
+        height: 1fr;
+    }
+
+    TabPane {
+        height: 1fr;
+    }
+
     #main-top-row {
         width: 100%;
-        height: auto;
-        min-height: 10;
+        height: 1fr;
+        min-height: 12;
     }
 
     #state-panel {
@@ -61,8 +69,19 @@ class MmwaveMonitorApp(App):
     }
 
     #radar-panel {
-        width: 1fr;
-        min-width: 30;
+        width: 2fr;
+        min-width: 40;
+    }
+
+    #vitals-panel {
+        height: 1fr;
+        min-height: 10;
+    }
+
+    #log-panel {
+        height: auto;
+        max-height: 8;
+        dock: bottom;
     }
     """
 

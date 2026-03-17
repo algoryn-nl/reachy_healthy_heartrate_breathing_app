@@ -189,9 +189,8 @@ class VitalsPanel(Vertical):
 
     DEFAULT_CSS = """
     VitalsPanel {
-        height: auto;
+        height: 1fr;
         min-height: 10;
-        max-height: 18;
         border: solid $primary;
         padding: 0 1;
     }
