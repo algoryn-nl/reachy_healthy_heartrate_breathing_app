@@ -96,6 +96,10 @@ class MmwaveMonitorApp(App):
         self._bio_tracker = BioAcceptanceTracker()
         self._start_time = time.monotonic()
         self._last_state: str = "NO_TARGET"
+        self._last_pose: str = ""
+        self._last_dist_cm: float | None = None
+        self._last_human: int = 0
+        self._last_n_targets: int = 0
         self._vitals_data = VitalsData()
         self._connected = False
 
@@ -207,6 +211,10 @@ class MmwaveMonitorApp(App):
         if event.event_type == "state" and isinstance(event.data, SensorSnapshot):
             snap = event.data
             self._last_state = snap.state
+            self._last_pose = snap.pose
+            self._last_dist_cm = snap.dist_cm
+            self._last_human = snap.human
+            self._last_n_targets = snap.n_targets
             try:
                 panel = self.query_one("#state-panel", StatePanel)
                 panel.update_state(
@@ -280,7 +288,16 @@ class MmwaveMonitorApp(App):
                 )
             try:
                 panel = self.query_one("#radar-panel", RadarPanel)
-                panel.update_targets(RadarData(targets=radar_targets, n_targets=te.n_targets))
+                panel.update_targets(
+                    RadarData(
+                        targets=radar_targets,
+                        n_targets=te.n_targets,
+                        device_state=self._last_state,
+                        device_pose=self._last_pose,
+                        dist_cm=self._last_dist_cm,
+                        human=self._last_human,
+                    )
+                )
             except Exception:
                 pass
 

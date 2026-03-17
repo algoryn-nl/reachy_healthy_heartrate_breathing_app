@@ -1,11 +1,13 @@
-"""Radar panel widget — braille-character top-down radar view.
+"""Radar panel widget — braille-character top-down radar view with target list.
 
 Renders a semi-circle radar with range rings at 1m intervals (0-6m),
 a dashed vitals zone arc at 0.35-1.5m, focus target highlighted in
-purple with glow, other targets dimmed.  Sensor icon at bottom center.
+purple with glow, other targets colored by distance.
 
 Braille characters (Unicode U+2800-U+28FF) provide sub-character
 resolution: each cell is 2 dots wide x 4 dots tall.
+
+The widget layout is: radar canvas (left) + target/state info list (right).
 """
 
 from __future__ import annotations
@@ -13,19 +15,14 @@ import math
 from dataclasses import field, dataclass
 
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.widgets import Static
+from textual.containers import Horizontal
 
 
 # ---------------------------------------------------------------------------
 # Braille canvas
 # ---------------------------------------------------------------------------
-
-# Braille base is U+2800.  Each cell is a 2x4 dot matrix.
-# Dot numbering (col, row) -> bit:
-#   (0,0)->0x01  (1,0)->0x08
-#   (0,1)->0x02  (1,1)->0x10
-#   (0,2)->0x04  (1,2)->0x20
-#   (0,3)->0x40  (1,3)->0x80
 
 _DOT_BITS: dict[tuple[int, int], int] = {
     (0, 0): 0x01,
@@ -44,16 +41,8 @@ BRAILLE_BASE = 0x2800
 class BrailleCanvas:
     """Pixel canvas rendered via braille characters.
 
-    Parameters
-    ----------
-    char_width:
-        Width of the canvas in terminal characters.
-    char_height:
-        Height of the canvas in terminal characters.
-
     The pixel resolution is ``(char_width * 2, char_height * 4)`` because
     each braille character encodes a 2-wide x 4-tall dot matrix.
-
     """
 
     def __init__(self, char_width: int, char_height: int) -> None:
@@ -62,7 +51,6 @@ class BrailleCanvas:
         self.char_height = char_height
         self.px_width = char_width * 2
         self.px_height = char_height * 4
-        # Grid of braille offset values per character cell
         self._grid: list[list[int]] = [[0] * char_width for _ in range(char_height)]
 
     def clear(self) -> None:
@@ -114,22 +102,10 @@ class BrailleCanvas:
         step: float = 0.02,
         dashed: bool = False,
     ) -> None:
-        """Draw an arc from start_angle to end_angle (radians, 0=right, pi/2=up).
-
-        For the radar, 0 degrees is straight ahead (up on screen), and the
-        arc sweeps left-to-right as a semicircle.  Angles are measured from
-        the positive-x axis of a standard math coordinate system, so we map:
-          angle=0   -> screen-up
-          angle=pi  -> screen-down (not used for semicircle)
-
-        When *dashed*, every other segment of ~4 pixels is skipped.
-        """
+        """Draw an arc from start_angle to end_angle (radians)."""
         theta = start_angle
         pixel_count = 0
         while theta <= end_angle:
-            # Standard math -> screen coords:
-            # x_screen = cx + r * cos(theta)
-            # y_screen = cy - r * sin(theta)   (screen y inverted)
             sx = cx + radius_px * math.cos(theta)
             sy = cy - radius_px * math.sin(theta)
             if not dashed or (pixel_count // 4) % 2 == 0:
@@ -139,7 +115,7 @@ class BrailleCanvas:
 
 
 # ---------------------------------------------------------------------------
-# Target data (stub — will be replaced by sensor_models.TargetInfo)
+# Target data
 # ---------------------------------------------------------------------------
 
 
@@ -164,6 +140,10 @@ class RadarData:
     max_range_m: float = 6.0
     vitals_inner_m: float = 0.35
     vitals_outer_m: float = 1.5
+    device_state: str = ""
+    device_pose: str = ""
+    dist_cm: float | None = None
+    human: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -174,12 +154,17 @@ class RadarData:
 def _target_color(target: RadarTarget) -> str:
     """Color a target by distance: green=near, yellow=mid, orange=far."""
     if target.is_focus:
-        return "#a78bfa"  # purple for focus
+        return "#a78bfa"
     if target.r < 1.0:
-        return "#4ade80"  # green — near
+        return "#4ade80"
     if target.r < 3.0:
-        return "#fbbf24"  # yellow — mid
-    return "#fb923c"  # orange — far
+        return "#fbbf24"
+    return "#fb923c"
+
+
+def _target_marker(target: RadarTarget) -> str:
+    """Return a marker character for the target."""
+    return "\u25cf" if target.is_focus else "\u2022"  # ● vs •
 
 
 def _world_to_pixel(
@@ -189,13 +174,7 @@ def _world_to_pixel(
     px_width: int,
     px_height: int,
 ) -> tuple[int, int]:
-    """Convert world coordinates (meters, sensor at origin, +y = forward) to pixel coords.
-
-    The sensor sits at the bottom center of the canvas.
-    +y in world = up on screen.
-    """
-    # Scale: full width maps to 2 * max_range_m (left-right)
-    # y=0 maps to py=(px_height - 1) (bottom), y=max_range maps to py=0 (top)
+    """Convert world coordinates (meters) to pixel coords."""
     scale_x = px_width / (2.0 * max_range_m)
     scale_y = (px_height - 1) / max_range_m
 
@@ -204,75 +183,86 @@ def _world_to_pixel(
     return px, py
 
 
+def _world_to_char(
+    x_m: float,
+    y_m: float,
+    max_range_m: float,
+    char_width: int,
+    char_height: int,
+) -> tuple[int, int]:
+    """Convert world coordinates to character cell position."""
+    scale_x = char_width / (2.0 * max_range_m)
+    scale_y = (char_height - 1) / max_range_m
+    cx = int(round(char_width / 2.0 + x_m * scale_x))
+    cy = int(round((char_height - 1) - y_m * scale_y))
+    return cx, cy
+
+
 def _range_to_radius_px(range_m: float, max_range_m: float, px_height: int) -> float:
     """Convert a range in meters to pixel radius for arc drawing."""
     return (range_m / max_range_m) * px_height
 
 
 # ---------------------------------------------------------------------------
-# RadarPanel Widget
+# Radar rendering (Rich Text with colors)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_CHAR_WIDTH = 30
-_DEFAULT_CHAR_HEIGHT = 12
 
+def render_radar_rich(
+    data: RadarData,
+    char_width: int,
+    char_height: int,
+) -> Text:
+    """Render radar to Rich Text with colored targets overlaid on braille grid."""
+    canvas = BrailleCanvas(char_width, char_height)
 
-class RadarPanel(Static):
-    """Top-down braille radar display rendered as Rich Text in a Static widget."""
+    sensor_cx = canvas.px_width / 2.0
+    sensor_cy = canvas.px_height - 1
 
-    def __init__(
-        self,
-        char_width: int = _DEFAULT_CHAR_WIDTH,
-        char_height: int = _DEFAULT_CHAR_HEIGHT,
-        **kwargs: object,
-    ) -> None:
-        """Create a radar panel with the given character dimensions."""
-        super().__init__("", **kwargs)
-        self._char_width = char_width
-        self._char_height = char_height
-        self._data = RadarData()
-        self._refresh_content()
+    # Range rings
+    for ring_m in range(1, int(data.max_range_m) + 1):
+        r_px = _range_to_radius_px(ring_m, data.max_range_m, canvas.px_height)
+        canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi)
 
-    def update_targets(self, data: RadarData) -> None:
-        """Push new target data and re-render the radar."""
-        self._data = data
-        self._refresh_content()
+    # Vitals zone arcs (dashed)
+    for vz_m in (data.vitals_inner_m, data.vitals_outer_m):
+        r_px = _range_to_radius_px(vz_m, data.max_range_m, canvas.px_height)
+        canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
 
-    def _refresh_content(self) -> None:
-        """Redraw the radar as Rich Text content."""
-        data = self._data
+    # Build target position map: char cell → (marker, color)
+    target_cells: dict[tuple[int, int], tuple[str, str]] = {}
+    for target in data.targets:
+        cx, cy = _world_to_char(target.x, target.y, data.max_range_m, char_width, char_height)
+        color = _target_color(target)
+        marker = _target_marker(target)
+        target_cells[(cx, cy)] = (marker, color)
+        # Also plot the target as braille dots for glow effect on focus
+        px, py = _world_to_pixel(target.x, target.y, data.max_range_m, canvas.px_width, canvas.px_height)
+        glow = 4 if target.is_focus else 2
+        canvas.plot_point(px, py, radius=glow)
 
-        content = Text()
+    # Render as Rich Text: braille grid with target markers overlaid
+    result = Text()
+    for cy in range(char_height):
+        for cx in range(char_width):
+            if (cx, cy) in target_cells:
+                marker, color = target_cells[(cx, cy)]
+                result.append(marker, style=f"bold {color}")
+            else:
+                ch = canvas.get_char(cx, cy)
+                result.append(ch, style="#555555")
+        result.append("\n")
 
-        # Header
-        content.append("RADAR", style="bold")
-        if data.n_targets > 0:
-            content.append(f"  {data.n_targets} target{'s' if data.n_targets != 1 else ''}")
-        content.append("\n")
-
-        # Braille canvas
-        plain = render_radar_text(data, self._char_width, self._char_height)
-        content.append(plain, style="#888888")
-        content.append("\n")
-
-        # Legend
-        legend_parts: list[str] = []
-        for ring_m in (1, 3, 6):
-            if ring_m <= data.max_range_m:
-                legend_parts.append(f"{ring_m}m")
-        content.append(" \u2500\u2500\u2500 ".join(legend_parts), style="dim")
-
-        self.update(content)
+    return result
 
 
 def render_radar_text(
     data: RadarData,
-    char_width: int = _DEFAULT_CHAR_WIDTH,
-    char_height: int = _DEFAULT_CHAR_HEIGHT,
+    char_width: int = 30,
+    char_height: int = 12,
 ) -> str:
     """Render radar to plain braille string (for testing without widget mount)."""
     canvas = BrailleCanvas(char_width, char_height)
-
     sensor_cx = canvas.px_width / 2.0
     sensor_cy = canvas.px_height - 1
 
@@ -286,7 +276,151 @@ def render_radar_text(
 
     for target in data.targets:
         px, py = _world_to_pixel(target.x, target.y, data.max_range_m, canvas.px_width, canvas.px_height)
-        glow = 2 if target.is_focus else 0
+        glow = 4 if target.is_focus else 2
         canvas.plot_point(px, py, radius=glow)
 
     return canvas.render_plain()
+
+
+# ---------------------------------------------------------------------------
+# Target info list rendering
+# ---------------------------------------------------------------------------
+
+
+def _render_target_list(data: RadarData) -> Text:
+    """Render the target info list with state summary."""
+    content = Text()
+
+    # State summary
+    if data.device_state:
+        state_color = {
+            "STILL_NEAR": "#4ade80",
+            "RESTING_VITALS": "#60a5fa",
+            "MOVING": "#fbbf24",
+            "PRESENT_FAR": "#fbbf24",
+            "NO_TARGET": "#555555",
+            "MULTI_TARGET": "#a78bfa",
+        }.get(data.device_state, "#888888")
+        content.append(data.device_state, style=f"bold {state_color}")
+        if data.device_pose:
+            content.append(f"  {data.device_pose}", style="dim")
+        content.append("\n")
+        if data.dist_cm is not None:
+            content.append(f"  dist {data.dist_cm:.1f}cm", style="dim")
+            content.append(f"  human={data.human}\n", style="dim")
+        content.append("\n")
+
+    # Targets
+    content.append("TARGETS", style="bold")
+    content.append(f"  {data.n_targets}\n")
+
+    if not data.targets:
+        content.append("  (none detected)\n", style="dim")
+    else:
+        for i, t in enumerate(data.targets):
+            color = _target_color(t)
+            marker = _target_marker(t)
+            label = "focus" if t.is_focus else f"t{t.cluster}"
+            content.append(f"  {marker} ", style=f"bold {color}")
+            content.append(f"{label:<6}", style=f"{color}")
+            content.append(f" r={t.r:>5.2f}m", style="")
+            content.append(f" \u03b8={t.bearing:>5.1f}\u00b0\n", style="dim")
+
+    # Vitals zone indicator
+    content.append("\n")
+    in_zone = any(data.vitals_inner_m <= t.r <= data.vitals_outer_m for t in data.targets)
+    if in_zone:
+        content.append("  \u2665 in vitals zone\n", style="bold #f472b6")
+    elif data.targets:
+        content.append("  outside vitals zone\n", style="dim")
+
+    return content
+
+
+# ---------------------------------------------------------------------------
+# RadarPanel Widget (container: radar canvas + target list)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CHAR_WIDTH = 30
+_DEFAULT_CHAR_HEIGHT = 12
+
+
+class _RadarCanvas(Static):
+    """Braille radar canvas sub-widget."""
+
+    pass
+
+
+class _TargetList(Static):
+    """Target info list sub-widget."""
+
+    pass
+
+
+class RadarPanel(Horizontal):
+    """Radar view with braille canvas and target/state info list."""
+
+    DEFAULT_CSS = """
+    RadarPanel {
+        height: auto;
+        min-height: 10;
+    }
+    RadarPanel > _RadarCanvas {
+        width: 2fr;
+    }
+    RadarPanel > _TargetList {
+        width: 1fr;
+        min-width: 22;
+    }
+    """
+
+    def __init__(
+        self,
+        char_width: int = _DEFAULT_CHAR_WIDTH,
+        char_height: int = _DEFAULT_CHAR_HEIGHT,
+        **kwargs: object,
+    ) -> None:
+        """Create a radar panel with the given character dimensions."""
+        super().__init__(**kwargs)
+        self._char_width = char_width
+        self._char_height = char_height
+        self._data = RadarData()
+
+    def compose(self) -> ComposeResult:
+        """Build layout: radar canvas (left) + target list (right)."""
+        yield _RadarCanvas("", id="radar-canvas")
+        yield _TargetList("", id="target-list")
+
+    def on_mount(self) -> None:
+        """Render initial empty radar on mount."""
+        self._refresh_content()
+
+    def update_targets(self, data: RadarData) -> None:
+        """Push new target data and re-render the radar."""
+        self._data = data
+        self._refresh_content()
+
+    def _refresh_content(self) -> None:
+        """Redraw both sub-widgets."""
+        data = self._data
+
+        # Radar canvas
+        radar_content = Text()
+        radar_content.append("RADAR", style="bold")
+        if data.n_targets > 0:
+            radar_content.append(f"  {data.n_targets} target{'s' if data.n_targets != 1 else ''}")
+        radar_content.append("\n")
+        radar_content.append_text(render_radar_rich(data, self._char_width, self._char_height))
+        legend_parts = [f"{m}m" for m in (1, 3, 6) if m <= data.max_range_m]
+        radar_content.append(" \u2500\u2500\u2500 ".join(legend_parts), style="dim")
+
+        try:
+            self.query_one("#radar-canvas", _RadarCanvas).update(radar_content)
+        except Exception:
+            pass
+
+        # Target list
+        try:
+            self.query_one("#target-list", _TargetList).update(_render_target_list(data))
+        except Exception:
+            pass
