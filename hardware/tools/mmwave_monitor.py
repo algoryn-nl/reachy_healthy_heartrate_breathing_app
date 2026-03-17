@@ -52,7 +52,17 @@ class MmwaveMonitorApp(App):
     #main-top-row {
         width: 100%;
         height: auto;
-        min-height: 8;
+        min-height: 10;
+    }
+
+    #state-panel {
+        width: 1fr;
+        min-width: 30;
+    }
+
+    #radar-panel {
+        width: 1fr;
+        min-width: 30;
     }
     """
 
@@ -199,15 +209,17 @@ class MmwaveMonitorApp(App):
             self._last_state = snap.state
             try:
                 panel = self.query_one("#state-panel", StatePanel)
-                panel.update_state(StateData(
-                    state=snap.state,
-                    pose=snap.pose,
-                    human=snap.human,
-                    n_targets=snap.n_targets,
-                    dist_cm=snap.dist_cm,
-                    head_moving=snap.head_moving,
-                    dist_new=snap.dist_new,
-                ))
+                panel.update_state(
+                    StateData(
+                        state=snap.state,
+                        pose=snap.pose,
+                        human=snap.human,
+                        n_targets=snap.n_targets,
+                        dist_cm=snap.dist_cm,
+                        head_moving=snap.head_moving,
+                        dist_new=snap.dist_new,
+                    )
+                )
             except Exception:
                 pass
 
@@ -245,16 +257,27 @@ class MmwaveMonitorApp(App):
             te = event.data
             radar_targets = []
             for t in te.targets:
-                radar_targets.append(RadarTarget(
-                    x=t.x, y=t.y, r=t.r, bearing=t.bearing,
-                    is_focus=(te.focus is not None and t.cluster == te.focus.cluster),
-                    cluster=t.cluster,
-                ))
+                radar_targets.append(
+                    RadarTarget(
+                        x=t.x,
+                        y=t.y,
+                        r=t.r,
+                        bearing=t.bearing,
+                        is_focus=(te.focus is not None and t.cluster == te.focus.cluster),
+                        cluster=t.cluster,
+                    )
+                )
             if te.focus and not any(rt.is_focus for rt in radar_targets):
-                radar_targets.append(RadarTarget(
-                    x=te.focus.x, y=te.focus.y, r=te.focus.r, bearing=te.focus.bearing,
-                    is_focus=True, cluster=te.focus.cluster,
-                ))
+                radar_targets.append(
+                    RadarTarget(
+                        x=te.focus.x,
+                        y=te.focus.y,
+                        r=te.focus.r,
+                        bearing=te.focus.bearing,
+                        is_focus=True,
+                        cluster=te.focus.cluster,
+                    )
+                )
             try:
                 panel = self.query_one("#radar-panel", RadarPanel)
                 panel.update_targets(RadarData(targets=radar_targets, n_targets=te.n_targets))
@@ -266,30 +289,32 @@ class MmwaveMonitorApp(App):
             dc = event.data
             try:
                 panel = self.query_one("#diag-panel", DiagPanel)
-                panel.refresh_data(DiagData(
-                    counters=DiagDiagCounters(
-                        mmwave_fail_count=dc.mmwave_fail_count,
-                        mmwave_consecutive_fails=dc.mmwave_consecutive_fails,
-                        tx_drop_count=dc.tx_drop_count,
-                    ),
-                    connection=DiagConnectionInfo(
-                        port=self._port or "",
-                        baud=self._baud,
-                    ),
-                    frame_stats=DiagFrameStats(
-                        frames_per_sec=self._frame_stats.frames_per_sec,
-                        bad_frame_count=self._frame_stats.bad_frame_count,
-                    ),
-                    event_rates=DiagEventRates(
-                        state=self._event_rates.rate("state", now),
-                        bio=self._event_rates.rate("bio", now),
-                        targets=self._event_rates.rate("targets", now),
-                        light=self._event_rates.rate("light", now),
-                        diag=self._event_rates.rate("diag", now),
-                    ),
-                    bio_acceptance_rate=self._bio_tracker.acceptance_rate(),
-                    uptime_s=now - self._start_time,
-                ))
+                panel.refresh_data(
+                    DiagData(
+                        counters=DiagDiagCounters(
+                            mmwave_fail_count=dc.mmwave_fail_count,
+                            mmwave_consecutive_fails=dc.mmwave_consecutive_fails,
+                            tx_drop_count=dc.tx_drop_count,
+                        ),
+                        connection=DiagConnectionInfo(
+                            port=self._port or "",
+                            baud=self._baud,
+                        ),
+                        frame_stats=DiagFrameStats(
+                            frames_per_sec=self._frame_stats.frames_per_sec,
+                            bad_frame_count=self._frame_stats.bad_frame_count,
+                        ),
+                        event_rates=DiagEventRates(
+                            state=self._event_rates.rate("state", now),
+                            bio=self._event_rates.rate("bio", now),
+                            targets=self._event_rates.rate("targets", now),
+                            light=self._event_rates.rate("light", now),
+                            diag=self._event_rates.rate("diag", now),
+                        ),
+                        bio_acceptance_rate=self._bio_tracker.acceptance_rate(),
+                        uptime_s=now - self._start_time,
+                    )
+                )
             except Exception:
                 pass
 

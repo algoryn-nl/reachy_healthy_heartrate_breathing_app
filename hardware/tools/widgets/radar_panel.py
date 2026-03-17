@@ -231,6 +231,7 @@ class RadarPanel(Static):
         self._char_width = char_width
         self._char_height = char_height
         self._data = RadarData()
+        self._refresh_content()
 
     def update_targets(self, data: RadarData) -> None:
         """Push new target data and re-render the radar."""
