@@ -400,28 +400,22 @@ class RadarPanel(Horizontal):
 
     DEFAULT_CSS = """
     RadarPanel {
-        height: auto;
-        min-height: 10;
+        height: 100%;
     }
     RadarPanel > _RadarCanvas {
         width: 2fr;
+        height: 100%;
     }
     RadarPanel > _TargetList {
         width: 1fr;
         min-width: 22;
+        height: 100%;
     }
     """
 
-    def __init__(
-        self,
-        char_width: int = _DEFAULT_CHAR_WIDTH,
-        char_height: int = _DEFAULT_CHAR_HEIGHT,
-        **kwargs: object,
-    ) -> None:
-        """Create a radar panel with the given character dimensions."""
+    def __init__(self, **kwargs: object) -> None:
+        """Create a radar panel that scales to available space."""
         super().__init__(**kwargs)
-        self._char_width = char_width
-        self._char_height = char_height
         self._data = RadarData()
 
     def compose(self) -> ComposeResult:
@@ -433,14 +427,31 @@ class RadarPanel(Horizontal):
         """Render initial empty radar on mount."""
         self._refresh_content()
 
+    def on_resize(self) -> None:
+        """Re-render when terminal resizes."""
+        self._refresh_content()
+
     def update_targets(self, data: RadarData) -> None:
         """Push new target data and re-render the radar."""
         self._data = data
         self._refresh_content()
 
+    def _get_canvas_size(self) -> tuple[int, int]:
+        """Get the radar canvas character dimensions from actual widget size."""
+        try:
+            canvas_widget = self.query_one("#radar-canvas", _RadarCanvas)
+            w = canvas_widget.size.width
+            h = canvas_widget.size.height
+            if w > 4 and h > 4:
+                return w, h - 2  # reserve 2 rows for header + legend
+        except Exception:
+            pass
+        return _DEFAULT_CHAR_WIDTH, _DEFAULT_CHAR_HEIGHT
+
     def _refresh_content(self) -> None:
         """Redraw both sub-widgets."""
         data = self._data
+        char_width, char_height = self._get_canvas_size()
 
         # Radar canvas
         radar_content = Text()
@@ -448,7 +459,7 @@ class RadarPanel(Horizontal):
         if data.n_targets > 0:
             radar_content.append(f"  {data.n_targets} target{'s' if data.n_targets != 1 else ''}")
         radar_content.append("\n")
-        radar_content.append_text(render_radar_rich(data, self._char_width, self._char_height))
+        radar_content.append_text(render_radar_rich(data, char_width, char_height))
         display_range = data.display_range_m
         ring_step = _nice_ring_step(display_range)
         legend_parts: list[str] = []
