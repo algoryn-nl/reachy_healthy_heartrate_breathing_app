@@ -59,18 +59,20 @@ class MmwaveMonitorApp(App):
 
     #main-top-row {
         width: 100%;
-        height: 1fr;
-        min-height: 12;
+        height: auto;
+        max-height: 50%;
     }
 
     #state-panel {
         width: 1fr;
         min-width: 30;
+        height: 100%;
     }
 
     #radar-panel {
         width: 2fr;
         min-width: 40;
+        height: 100%;
     }
 
     #vitals-panel {
@@ -80,8 +82,7 @@ class MmwaveMonitorApp(App):
 
     #log-panel {
         height: auto;
-        max-height: 8;
-        dock: bottom;
+        max-height: 6;
     }
     """
 
