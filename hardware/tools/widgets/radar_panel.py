@@ -145,6 +145,23 @@ class RadarData:
     dist_cm: float | None = None
     human: int = 0
 
+    @property
+    def display_range_m(self) -> float:
+        """Auto-zoom: pick a range that fits the farthest target with padding.
+
+        Snaps to nice round values: 1, 1.5, 2, 3, 4, 6m.
+        Falls back to max_range_m when no targets.
+        """
+        if not self.targets:
+            return self.max_range_m
+        farthest = max(t.r for t in self.targets)
+        # Snap to next nice range with 30% padding
+        padded = farthest * 1.3
+        for nice in (1.0, 1.5, 2.0, 3.0, 4.0, 6.0):
+            if padded <= nice:
+                return nice
+        return self.max_range_m
+
 
 # ---------------------------------------------------------------------------
 # Coordinate mapping helpers
@@ -198,6 +215,17 @@ def _world_to_char(
     return cx, cy
 
 
+def _nice_ring_step(display_range: float) -> float:
+    """Pick a ring spacing that gives 3-5 rings for the display range."""
+    if display_range <= 1.0:
+        return 0.25
+    if display_range <= 2.0:
+        return 0.5
+    if display_range <= 4.0:
+        return 1.0
+    return 2.0
+
+
 def _range_to_radius_px(range_m: float, max_range_m: float, px_height: int) -> float:
     """Convert a range in meters to pixel radius for arc drawing."""
     return (range_m / max_range_m) * px_height
@@ -214,30 +242,35 @@ def render_radar_rich(
     char_height: int,
 ) -> Text:
     """Render radar to Rich Text with colored targets overlaid on braille grid."""
+    display_range = data.display_range_m
     canvas = BrailleCanvas(char_width, char_height)
 
     sensor_cx = canvas.px_width / 2.0
     sensor_cy = canvas.px_height - 1
 
-    # Range rings
-    for ring_m in range(1, int(data.max_range_m) + 1):
-        r_px = _range_to_radius_px(ring_m, data.max_range_m, canvas.px_height)
+    # Range rings — only show rings that fit in display range
+    ring_step = _nice_ring_step(display_range)
+    ring_m = ring_step
+    while ring_m <= display_range:
+        r_px = _range_to_radius_px(ring_m, display_range, canvas.px_height)
         canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi)
+        ring_m += ring_step
 
     # Vitals zone arcs (dashed)
     for vz_m in (data.vitals_inner_m, data.vitals_outer_m):
-        r_px = _range_to_radius_px(vz_m, data.max_range_m, canvas.px_height)
-        canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
+        if vz_m <= display_range:
+            r_px = _range_to_radius_px(vz_m, display_range, canvas.px_height)
+            canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
 
     # Build target position map: char cell → (marker, color)
     target_cells: dict[tuple[int, int], tuple[str, str]] = {}
     for target in data.targets:
-        cx, cy = _world_to_char(target.x, target.y, data.max_range_m, char_width, char_height)
+        cx, cy = _world_to_char(target.x, target.y, display_range, char_width, char_height)
         color = _target_color(target)
         marker = _target_marker(target)
         target_cells[(cx, cy)] = (marker, color)
         # Also plot the target as braille dots for glow effect on focus
-        px, py = _world_to_pixel(target.x, target.y, data.max_range_m, canvas.px_width, canvas.px_height)
+        px, py = _world_to_pixel(target.x, target.y, display_range, canvas.px_width, canvas.px_height)
         glow = 4 if target.is_focus else 2
         canvas.plot_point(px, py, radius=glow)
 
@@ -262,20 +295,25 @@ def render_radar_text(
     char_height: int = 12,
 ) -> str:
     """Render radar to plain braille string (for testing without widget mount)."""
+    display_range = data.display_range_m
     canvas = BrailleCanvas(char_width, char_height)
     sensor_cx = canvas.px_width / 2.0
     sensor_cy = canvas.px_height - 1
 
-    for ring_m in range(1, int(data.max_range_m) + 1):
-        r_px = _range_to_radius_px(ring_m, data.max_range_m, canvas.px_height)
+    ring_step = _nice_ring_step(display_range)
+    ring_m = ring_step
+    while ring_m <= display_range:
+        r_px = _range_to_radius_px(ring_m, display_range, canvas.px_height)
         canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi)
+        ring_m += ring_step
 
     for vz_m in (data.vitals_inner_m, data.vitals_outer_m):
-        r_px = _range_to_radius_px(vz_m, data.max_range_m, canvas.px_height)
-        canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
+        if vz_m <= display_range:
+            r_px = _range_to_radius_px(vz_m, display_range, canvas.px_height)
+            canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
 
     for target in data.targets:
-        px, py = _world_to_pixel(target.x, target.y, data.max_range_m, canvas.px_width, canvas.px_height)
+        px, py = _world_to_pixel(target.x, target.y, display_range, canvas.px_width, canvas.px_height)
         glow = 4 if target.is_focus else 2
         canvas.plot_point(px, py, radius=glow)
 
@@ -411,8 +449,14 @@ class RadarPanel(Horizontal):
             radar_content.append(f"  {data.n_targets} target{'s' if data.n_targets != 1 else ''}")
         radar_content.append("\n")
         radar_content.append_text(render_radar_rich(data, self._char_width, self._char_height))
-        legend_parts = [f"{m}m" for m in (1, 3, 6) if m <= data.max_range_m]
-        radar_content.append(" \u2500\u2500\u2500 ".join(legend_parts), style="dim")
+        display_range = data.display_range_m
+        ring_step = _nice_ring_step(display_range)
+        legend_parts: list[str] = []
+        ring_m = ring_step
+        while ring_m <= display_range:
+            legend_parts.append(f"{ring_m:g}m")
+            ring_m += ring_step
+        radar_content.append(" \u2500 ".join(legend_parts), style="dim")
 
         try:
             self.query_one("#radar-canvas", _RadarCanvas).update(radar_content)
