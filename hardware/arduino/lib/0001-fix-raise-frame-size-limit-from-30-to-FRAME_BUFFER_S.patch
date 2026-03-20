@@ -1,0 +1,31 @@
+From 7028c2c14f0a46ba978e39361fbf1a301545ea3e Mon Sep 17 00:00:00 2001
+From: Tom Mulder <mulder.tom@gmail.com>
+Date: Fri, 20 Mar 2026 11:37:05 +0100
+Subject: [PATCH] fix: raise frame size limit from 30 to FRAME_BUFFER_SIZE
+
+The hardcoded 30-byte limit silently dropped any sensor frame with a
+payload larger than 30 bytes. This prevented multi-target data from
+flowing through (2 targets = 36 bytes, 3 targets = 52 bytes). Use the
+existing FRAME_BUFFER_SIZE (512) constant instead.
+---
+ src/SeeedmmWave.cpp | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/SeeedmmWave.cpp b/src/SeeedmmWave.cpp
+index 92a6378..25159ed 100644
+--- a/src/SeeedmmWave.cpp
++++ b/src/SeeedmmWave.cpp
+@@ -362,9 +362,8 @@ void SeeedmmWave::fetch(uint32_t timeout) {
+         if (frameBuffer.size() >= SIZE_FRAME_HEADER)  // right package
+         {
+           frameDataSize = (frameBuffer[3] << 8 | frameBuffer[4]);
+-          if (frameDataSize > 30) {
++          if (frameDataSize > FRAME_BUFFER_SIZE) {
+             startFrame = false;
+-            // Serial.println("FrameDataSize too large, clearing buffer");
+             continue;
+           }
+           if (frameBuffer.size() ==
+-- 
+2.52.0
+

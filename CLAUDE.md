@@ -419,7 +419,8 @@ hardware/
   arduino/
     reachy-sensor/          -- firmware source (.ino)
       reachy_codec.h        -- header-only pure functions (COBS, CRC, serialization, scaling)
-    lib/                    -- Seeed mmWave library (git submodule)
+    lib/                    -- Seeed mmWave library (git submodule, patched)
+      0001-fix-raise-frame-size-limit-from-30-to-FRAME_BUFFER_S.patch  -- upstream patch
   tests/
     reachy_codec_shim.c     -- ctypes shim exporting reachy_codec.h functions
     Makefile                -- builds libreachy_codec shared library
