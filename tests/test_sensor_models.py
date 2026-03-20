@@ -19,6 +19,7 @@ from healthy_heartrate_breathing.sensor_models import (
     NotableFilter,
     ConnectionInfo,
     SensorSnapshot,
+    TargetSmoother,
     TimeSeriesBuffer,
     StateTransitionLog,
     BioAcceptanceTracker,
@@ -253,6 +254,46 @@ class TestEventRates:
     def test_unknown_type_zero(self) -> None:
         rates = EventRates(window_s=10.0)
         assert rates.rate("bio", time.monotonic()) == 0.0
+
+
+class TestTargetSmoother:
+    def test_first_value_passes_through(self) -> None:
+        s = TargetSmoother(alpha=0.35)
+        sx, sy = s.smooth(0, 1.0, 2.0, 100.0)
+        assert sx == 1.0
+        assert sy == 2.0
+
+    def test_ema_smoothing(self) -> None:
+        s = TargetSmoother(alpha=0.5)
+        s.smooth(0, 0.0, 1.0, 100.0)
+        sx, sy = s.smooth(0, 1.0, 1.0, 100.1)
+        assert sx == pytest.approx(0.5)
+        assert sy == pytest.approx(1.0)
+
+    def test_stale_cluster_resets(self) -> None:
+        s = TargetSmoother(alpha=0.5, stale_s=1.0)
+        s.smooth(0, 0.0, 1.0, 100.0)
+        sx, sy = s.smooth(0, 2.0, 3.0, 102.0)  # >1s gap
+        assert sx == 2.0  # reset, not smoothed
+        assert sy == 3.0
+
+    def test_prune_removes_stale(self) -> None:
+        s = TargetSmoother(alpha=0.5, stale_s=1.0)
+        s.smooth(0, 0.0, 1.0, 100.0)
+        s.smooth(1, 1.0, 1.0, 101.5)
+        s.prune(101.5)
+        # Cluster 0 (last seen at 100.0) should be pruned, cluster 1 kept
+        assert 0 not in s._state
+        assert 1 in s._state
+
+    def test_independent_clusters(self) -> None:
+        s = TargetSmoother(alpha=0.5)
+        s.smooth(0, 0.0, 0.0, 100.0)
+        s.smooth(1, 10.0, 10.0, 100.0)
+        sx0, sy0 = s.smooth(0, 1.0, 1.0, 100.1)
+        sx1, sy1 = s.smooth(1, 10.0, 10.0, 100.1)
+        assert sx0 == pytest.approx(0.5)
+        assert sx1 == pytest.approx(10.0)
 
 
 class TestEventFromDict:

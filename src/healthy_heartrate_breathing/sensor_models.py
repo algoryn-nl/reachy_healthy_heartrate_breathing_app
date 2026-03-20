@@ -243,6 +243,37 @@ class TimeSeriesBuffer:
         return len(self._values)
 
 
+class TargetSmoother:
+    """Exponential moving average filter for radar target positions.
+
+    Tracks per-cluster smoothed (x, y) coordinates. Stale clusters are
+    evicted after ``stale_s`` seconds without an update.
+    """
+
+    def __init__(self, alpha: float = 0.35, stale_s: float = 2.0) -> None:
+        """Create smoother with EMA weight *alpha* (0–1, higher = more responsive)."""
+        self._alpha = alpha
+        self._stale_s = stale_s
+        self._state: dict[int, tuple[float, float, float]] = {}  # cluster → (x, y, last_ts)
+
+    def smooth(self, cluster: int, x: float, y: float, now: float) -> tuple[float, float]:
+        """Return smoothed (x, y) for *cluster*, updating internal state."""
+        prev = self._state.get(cluster)
+        if prev is None or (now - prev[2]) > self._stale_s:
+            self._state[cluster] = (x, y, now)
+            return x, y
+        a = self._alpha
+        sx = a * x + (1 - a) * prev[0]
+        sy = a * y + (1 - a) * prev[1]
+        self._state[cluster] = (sx, sy, now)
+        return sx, sy
+
+    def prune(self, now: float) -> None:
+        """Remove clusters not seen for longer than stale_s."""
+        cutoff = now - self._stale_s
+        self._state = {k: v for k, v in self._state.items() if v[2] >= cutoff}
+
+
 class EventRates:
     """Per-event-type rates via sliding window."""
 

@@ -191,11 +191,15 @@ def _world_to_pixel(
     px_width: int,
     px_height: int,
 ) -> tuple[int, int]:
-    """Convert world coordinates (meters) to pixel coords."""
+    """Convert world coordinates (meters) to pixel coords.
+
+    The x-axis is mirrored so the display matches the user's perspective
+    when the screen faces the same direction as the sensor.
+    """
     scale_x = px_width / (2.0 * max_range_m)
     scale_y = (px_height - 1) / max_range_m
 
-    px = int(round(px_width / 2.0 + x_m * scale_x))
+    px = int(round(px_width / 2.0 - x_m * scale_x))
     py = int(round((px_height - 1) - y_m * scale_y))
     return px, py
 
@@ -207,10 +211,10 @@ def _world_to_char(
     char_width: int,
     char_height: int,
 ) -> tuple[int, int]:
-    """Convert world coordinates to character cell position."""
+    """Convert world coordinates to character cell position (mirrored x)."""
     scale_x = char_width / (2.0 * max_range_m)
     scale_y = (char_height - 1) / max_range_m
-    cx = int(round(char_width / 2.0 + x_m * scale_x))
+    cx = int(round(char_width / 2.0 - x_m * scale_x))
     cy = int(round((char_height - 1) - y_m * scale_y))
     return cx, cy
 
@@ -236,6 +240,11 @@ def _range_to_radius_px(range_m: float, max_range_m: float, px_height: int) -> f
 # ---------------------------------------------------------------------------
 
 
+_RING_COLOR = "#888888"
+_VITALS_ZONE_COLOR = "#c084fc"  # soft purple — vitals zone arcs
+_GLOW_COLOR = "#444444"
+
+
 def render_radar_rich(
     data: RadarData,
     char_width: int,
@@ -243,24 +252,28 @@ def render_radar_rich(
 ) -> Text:
     """Render radar to Rich Text with colored targets overlaid on braille grid."""
     display_range = data.display_range_m
-    canvas = BrailleCanvas(char_width, char_height)
 
-    sensor_cx = canvas.px_width / 2.0
-    sensor_cy = canvas.px_height - 1
+    # Separate canvases so each layer gets its own color
+    ring_canvas = BrailleCanvas(char_width, char_height)
+    vitals_canvas = BrailleCanvas(char_width, char_height)
+    glow_canvas = BrailleCanvas(char_width, char_height)
 
-    # Range rings — only show rings that fit in display range
+    sensor_cx = ring_canvas.px_width / 2.0
+    sensor_cy = ring_canvas.px_height - 1
+
+    # Range rings
     ring_step = _nice_ring_step(display_range)
     ring_m = ring_step
     while ring_m <= display_range:
-        r_px = _range_to_radius_px(ring_m, display_range, canvas.px_height)
-        canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi)
+        r_px = _range_to_radius_px(ring_m, display_range, ring_canvas.px_height)
+        ring_canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi)
         ring_m += ring_step
 
     # Vitals zone arcs (dashed)
     for vz_m in (data.vitals_inner_m, data.vitals_outer_m):
         if vz_m <= display_range:
-            r_px = _range_to_radius_px(vz_m, display_range, canvas.px_height)
-            canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
+            r_px = _range_to_radius_px(vz_m, display_range, ring_canvas.px_height)
+            vitals_canvas.draw_arc(sensor_cx, sensor_cy, r_px, start_angle=0.0, end_angle=math.pi, dashed=True)
 
     # Build target position map: char cell → (marker, color)
     target_cells: dict[tuple[int, int], tuple[str, str]] = {}
@@ -269,21 +282,25 @@ def render_radar_rich(
         color = _target_color(target)
         marker = _target_marker(target)
         target_cells[(cx, cy)] = (marker, color)
-        # Also plot the target as braille dots for glow effect on focus
-        px, py = _world_to_pixel(target.x, target.y, display_range, canvas.px_width, canvas.px_height)
+        px, py = _world_to_pixel(target.x, target.y, display_range, glow_canvas.px_width, glow_canvas.px_height)
         glow = 4 if target.is_focus else 2
-        canvas.plot_point(px, py, radius=glow)
+        glow_canvas.plot_point(px, py, radius=glow)
 
-    # Render as Rich Text: braille grid with target markers overlaid
+    # Render: target markers > vitals zone > glow > range rings > empty
     result = Text()
     for cy in range(char_height):
         for cx in range(char_width):
             if (cx, cy) in target_cells:
                 marker, color = target_cells[(cx, cy)]
                 result.append(marker, style=f"bold {color}")
+            elif vitals_canvas.get_char(cx, cy) != chr(BRAILLE_BASE):
+                result.append(vitals_canvas.get_char(cx, cy), style=_VITALS_ZONE_COLOR)
+            elif glow_canvas.get_char(cx, cy) != chr(BRAILLE_BASE):
+                result.append(glow_canvas.get_char(cx, cy), style=_GLOW_COLOR)
+            elif ring_canvas.get_char(cx, cy) != chr(BRAILLE_BASE):
+                result.append(ring_canvas.get_char(cx, cy), style=_RING_COLOR)
             else:
-                ch = canvas.get_char(cx, cy)
-                result.append(ch, style="#555555")
+                result.append(chr(BRAILLE_BASE))
         result.append("\n")
 
     return result

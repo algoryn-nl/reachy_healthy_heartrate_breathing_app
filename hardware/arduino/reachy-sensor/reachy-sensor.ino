@@ -331,9 +331,10 @@ static const uint32_t DIAG_MS = 10000;                 // diagnostic emission in
 // Cached sensor values. The radar doesn't always return fresh readings every
 // cycle; we fall back to the last known good value within an expiry window.
 struct VitalsCache {
-  float dist   = NAN;   // last good distance (cm) — no expiry (distance is stable)
+  float dist   = NAN;   // last good distance (cm) — expires after VITALS_CACHE_EXPIRY_MS
   float br     = NAN;   // last good breathing rate (bpm) — expires after VITALS_CACHE_EXPIRY_MS
   float hr     = NAN;   // last good heart rate (bpm) — expires after VITALS_CACHE_EXPIRY_MS
+  uint32_t distUpdateMs = 0;  // timestamp of last fresh distance reading
   uint32_t brUpdateMs = 0;  // timestamp of last fresh BR reading
   uint32_t hrUpdateMs = 0;  // timestamp of last fresh HR reading
 };
@@ -1033,11 +1034,15 @@ void pollRadar(uint32_t now) {
   snap.br_ok = mmWave.getBreathRate(br);
   snap.hr_ok = mmWave.getHeartRate(hr);
 
-  // Distance fallback (no expiry)
+  // Distance fallback (2-second expiry, same as vitals)
   if (snap.dist_ok && isfinite(dist_cm)) {
     vitals.dist = dist_cm;
-  } else {
+    vitals.distUpdateMs = now;
+  } else if ((now - vitals.distUpdateMs) <= VITALS_CACHE_EXPIRY_MS) {
     dist_cm = vitals.dist;
+  } else {
+    vitals.dist = NAN;
+    dist_cm = NAN;
   }
   snap.dist_ok = isFinitePositive(dist_cm);
   snap.dist_cm = dist_cm;
