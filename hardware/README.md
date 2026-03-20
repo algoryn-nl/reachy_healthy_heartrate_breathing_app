@@ -232,4 +232,5 @@ If either side is old, communication will fail.
 
 - Arduino BH1750 library (`BH1750.h`) is required for `EVT_LIGHT`.
 - Seeed mmWave library (git submodule in `lib/Seeed-mmWave-library/`).
-  - **Patched**: `SeeedmmWave::fetch()` frame size limit raised from hardcoded 30 bytes to `FRAME_BUFFER_SIZE` (512). The upstream library silently drops any frame >30 bytes, which prevents multi-target data from flowing through (2 targets = 36 bytes payload). A patch file is available at `lib/0001-fix-raise-frame-size-limit-from-30-to-FRAME_BUFFER_S.patch` for upstream contribution.
+  - **Patched**: `SeeedmmWave::fetch()` frame size limit raised from hardcoded 30 bytes to `FRAME_BUFFER_SIZE` (512). The upstream library silently drops any frame >30 bytes, which prevents multi-target data from flowing through (2 targets = 36 bytes payload). A patch file is available at `lib/0001-fix-raise-frame-size-limit-from-30-to-FRAME_BUFFER_S.patch`.
+  - **Upstream PR**: Submitted to [`Love4yzp/Seeed-mmWave-library`](https://github.com/Love4yzp/Seeed-mmWave-library), waiting approval (2026-03-20). When merged, update the git submodule to the new upstream commit and remove the local patch file.
