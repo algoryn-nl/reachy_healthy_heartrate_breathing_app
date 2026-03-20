@@ -119,13 +119,16 @@ def render_state_bar(states: list[str], width: int) -> Text:
 
 
 def _acceptance_label(allowed: int, valid: int) -> Text:
-    """Return a colored ok/fail label for bio acceptance gate."""
+    """Return a colored gate/quality label for bio acceptance.
+
+    Gate = conditions allow vitals (single target, head still).
+    Quality = both HR and BR passed guard-rail validation.
+    """
     parts = Text()
-    a_style = "green" if allowed else "red"
-    v_style = "green" if valid else "red"
-    parts.append("ok" if allowed else "fail", style=a_style)
-    parts.append("/")
-    parts.append("ok" if valid else "fail", style=v_style)
+    parts.append("gate:", style="dim")
+    parts.append("\u2713" if allowed else "\u2717", style="green" if allowed else "red")
+    parts.append(" qual:", style="dim")
+    parts.append("\u2713" if valid else "\u2717", style="green" if valid else "red")
     return parts
 
 
@@ -156,14 +159,14 @@ class _VitalsHeader(Static):
             content.append(f"{data.hr_current:.0f}", style="bold red")
             content.append(" bpm  ")
         else:
-            content.append("-- bpm  ", style="dim")
+            content.append("--  ", style="dim")
 
         content.append("BR ", style="bold")
         if data.br_current is not None:
             content.append(f"{data.br_current:.0f}", style="bold cyan")
-            content.append(" bpm")
+            content.append(" rpm")
         else:
-            content.append("-- bpm", style="dim")
+            content.append("--", style="dim")
 
         self.update(content)
 
@@ -177,10 +180,14 @@ class _StateBar(Static):
         self._label = label
 
     def refresh_states(self, states: list[str]) -> None:
-        """Redraw the bar from state list."""
+        """Redraw the bar from state list with current state label."""
         content = Text()
         content.append(f"  {self._label} ", style="dim")
         content.append_text(render_state_bar(states, _BAR_WIDTH))
+        if states:
+            current = states[-1]
+            color = _STATE_BAR_COLORS.get(current, "bright_black")
+            content.append(f" {current}", style=color)
         self.update(content)
 
 
@@ -244,7 +251,7 @@ class VitalsPanel(Vertical):
             except Exception:
                 pass
             try:
-                _render_chart(self.query_one("#br-chart", PlotextPlot), data.br_series, "cyan", "Breathing (bpm)")
+                _render_chart(self.query_one("#br-chart", PlotextPlot), data.br_series, "cyan", "Breathing (rpm)")
             except Exception:
                 pass
 

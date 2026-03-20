@@ -225,7 +225,8 @@ The project includes a custom hardware component under `hardware/`.
 - Poll/tick architecture: `pollRadar()` writes `SensorSnapshot` every iteration; `tickStateMachine()` runs at fixed 10 Hz with wall-clock hysteresis (no frame-count coupling)
 - Vitals gating: heart/breath rates only reported when single-target, still, not head-moving, within near zone (35–150cm)
 - Guard rails: BR 4–30 bpm, HR 35–200 bpm
-- Depends on Seeed mmWave library (git submodule in `hardware/arduino/lib/Seeed-mmWave-library/`) and Arduino BH1750 library
+- Distance cache expiry: cached distance expires after `VITALS_CACHE_EXPIRY_MS` (2s), same as HR/BR — prevents state machine from getting stuck on stale distance when everyone leaves
+- Depends on Seeed mmWave library (git submodule in `hardware/arduino/lib/Seeed-mmWave-library/`, **patched**: frame size limit raised from 30 to `FRAME_BUFFER_SIZE` to allow multi-target frames) and Arduino BH1750 library
 
 **Binary protocol** (`MMWAVE_PROTO_V1`): fully documented in `hardware/README.md`
 - Transport: COBS-framed packets terminated by `0x00`, CRC-16/CCITT-FALSE verified, little-endian
@@ -291,19 +292,21 @@ When running with `--gradio`, these endpoints are mounted on the Gradio ASGI app
 - **BioAcceptanceTracker**: Tracks bio reading acceptance/rejection statistics
 - **StateTransitionLog**: Records device state transitions with timestamps
 - **TimeSeriesBuffer**: Fixed-capacity time-series buffer for vitals charting
+- **TargetSmoother**: Per-cluster exponential moving average (EMA) filter for radar target x/y positions; reduces jitter while preserving real lateral movement
 - **EventRates**: Tracks per-event-type rates for diagnostics
 - **`event_from_dict()`**: Converts raw decoded dicts into typed dataclasses
 - **`read_events()`**: Async iterator over serial port frames using `mmwave_protocol`
 
 ### TUI Monitor (`hardware/tools/mmwave_monitor.py`)
 
-A Textual-based terminal UI for real-time mmWave sensor monitoring, launched via `mmwave_decode.py --format tui` (the default format). Provides five widget panels:
+A Textual-based terminal UI for real-time mmWave sensor monitoring, launched via `mmwave_decode.py --format tui` (the default format). Three tabs: Main, Diag, Help.
 
-- **State panel** (`widgets/state_panel.py`): Device state, target count, lux, bio acceptance stats
-- **Radar panel** (`widgets/radar_panel.py`): Top-down ASCII radar view of detected targets with range rings
-- **Vitals panel** (`widgets/vitals_panel.py`): Rolling textual-plotext charts for heart rate and breathing rate
+- **State panel** (`widgets/state_panel.py`): Device state icon, pose, target count, lux bar
+- **Radar panel** (`widgets/radar_panel.py`): Braille-character top-down radar with colored layers (range rings `#888888`, vitals zone arcs `#c084fc`, target glow `#444444`); x-axis mirrored for user-facing display; target positions smoothed via `TargetSmoother` EMA
+- **Vitals panel** (`widgets/vitals_panel.py`): Rolling textual-plotext charts for HR (bpm) and BR (rpm); header shows gate/quality acceptance labels; state annotation bars under charts with current state name
 - **Log panel** (`widgets/log_panel.py`): Scrolling event log with notable event filtering
 - **Diagnostics panel** (`widgets/diag_panel.py`): Firmware diagnostic counters (mmWave fails, TX drops, consecutive errors)
+- **Help tab**: Full legend for device states, vitals labels, radar colors, state bar, and keybindings
 
 ### Key Dependencies
 
@@ -539,7 +542,7 @@ Key configuration (see `.env.example`):
 - `conftest.py` sets `REACHY_MINI_SKIP_DOTENV=1` and clears profile env vars for isolation
 - Tests do not require a connected robot or OpenAI key
 - The tool registry uses lazy initialization — it runs on first call to `get_tool_specs()` or `dispatch_tool_call()`, not at import time
-- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (650 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, SensorBroadcaster WebSocket tests, VitalsAggregator rollup/pruning tests, TrendAnalyzer anomaly detection tests, vitals_trends tool integration tests, sensor_models dataclass/buffer/filter tests, and TUI monitor widget/app tests)
+- Test coverage is comprehensive across all handler classes (IdlePolicy, LightOrchestrator, ToolDispatcher, TranscriptHandler, AudioRouter) and `openai_realtime.py` (659 tests total; includes multi-person tracking logic, protocol version handshake, bio rate boundary conditions at firmware guard rails, proximity/occlusion classification and analytics schema migration, device_context integration, EVT_DIAG diagnostics decode and integration, full openai_realtime coverage, HeadWobbler thread-safety/deadlock tests, tool registry thread-safety/sys.modules cleanup, IdlePolicy constructor validation, sweep_look error handling, tool_ok/tool_error helpers, firmware codec cross-validation via ctypes, TranscriptHandler concurrent debounce tests, ToolDispatcher malformed sensor state tests, MovementManager multi-threaded stress tests, deterministic async test patterns, VitalsStore SQLite persistence tests, SensorBroadcaster WebSocket tests, VitalsAggregator rollup/pruning tests, TrendAnalyzer anomaly detection tests, vitals_trends tool integration tests, sensor_models dataclass/buffer/filter/TargetSmoother tests, and TUI monitor widget/app tests)
 - `pytest-asyncio` is used for async test support
 - mypy covers both `src/` and `tests/`
 

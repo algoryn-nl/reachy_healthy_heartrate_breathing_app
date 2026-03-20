@@ -252,4 +252,4 @@ uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --form
 uv run python hardware/tools/mmwave_decode.py --port /dev/cu.usbmodemXXXX --filter EVT_BIO,EVT_STATE
 ```
 
-The TUI displays five panels: device state overview, top-down radar view of detected targets, rolling vitals charts (HR/BR), scrolling event log with notable event filtering, and firmware diagnostics. Requires `textual` and `textual-plotext` (included in the `dev` dependency group).
+The TUI has three tabs (Main, Diag, Help). Main shows: device state with icons, braille-character radar with colored range rings and vitals zone arcs (target positions smoothed via EMA filter, x-axis mirrored for user-facing display), rolling vitals charts (HR in bpm, BR in rpm) with state annotation bars, and scrolling event log. The Help tab provides a full legend for all colors and labels. Requires `textual` and `textual-plotext` (included in the `dev` dependency group).

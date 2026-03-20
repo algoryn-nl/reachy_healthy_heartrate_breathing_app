@@ -73,7 +73,7 @@ class TestAppSkeleton:
 
     @pytest.mark.asyncio
     async def test_next_tab_action_cycles(self) -> None:
-        """action_next_tab cycles between main and diag."""
+        """action_next_tab cycles through main, diag, and help."""
         from mmwave_monitor import MmwaveMonitorApp
         from textual.widgets import TabbedContent
 
@@ -83,6 +83,8 @@ class TestAppSkeleton:
             assert tc.active == "main"
             app.action_next_tab()
             assert tc.active == "diag"
+            app.action_next_tab()
+            assert tc.active == "help"
             app.action_next_tab()
             assert tc.active == "main"
 
@@ -554,18 +556,26 @@ class TestAcceptanceLabel:
     """Bio acceptance label formatting."""
 
     def test_ok_ok(self) -> None:
-        """Both allowed and valid shows ok/ok."""
+        """Both allowed and valid shows gate:✓ qual:✓."""
         from widgets.vitals_panel import _acceptance_label
 
         label = _acceptance_label(1, 1)
-        assert "ok" in label.plain
+        assert label.plain.count("\u2713") == 2
 
     def test_fail_fail(self) -> None:
-        """Neither allowed nor valid shows fail/fail."""
+        """Neither allowed nor valid shows gate:✗ qual:✗."""
         from widgets.vitals_panel import _acceptance_label
 
         label = _acceptance_label(0, 0)
-        assert "fail" in label.plain
+        assert label.plain.count("\u2717") == 2
+
+    def test_mixed(self) -> None:
+        """Allowed but not valid shows gate:✓ qual:✗."""
+        from widgets.vitals_panel import _acceptance_label
+
+        label = _acceptance_label(1, 0)
+        assert "\u2713" in label.plain
+        assert "\u2717" in label.plain
 
 
 class TestVitalsPanelWidget:
